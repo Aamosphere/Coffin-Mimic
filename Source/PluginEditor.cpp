@@ -918,14 +918,16 @@ void MimicEditor::paintFront (juce::Graphics& g)
     g.setFont (font (look.bangers, 34.0f));
     g.drawText ("BITE " + valueText (ids::bite), 120, 506, 300, 36, juce::Justification::centred);
 
-    // Speed and Mix panels.
+    // Speed and Mix: one panel, as they work in both modes.
+    g.setColour (panel);
+    g.fillRoundedRectangle (globalArea.toFloat(), 8.0f);
+    g.setColour (edge);
+    g.drawRoundedRectangle (globalArea.toFloat(), 8.0f, 2.0f);
+    g.fillRect (globalArea.getCentreX() - 1, globalArea.getY() + 12, 2, globalArea.getHeight() - 24);
+
     for (auto* k : { &speed, &mix })
     {
-        const auto box = k->slider.getBounds().expanded (44, 8).withHeight (100);
-        g.setColour (panel);
-        g.fillRoundedRectangle (box.toFloat(), 8.0f);
-        g.setColour (edge);
-        g.drawRoundedRectangle (box.toFloat(), 8.0f, 2.0f);
+        const auto box = juce::Rectangle<int> (k->slider.getX() - 60, globalArea.getY(), k->slider.getWidth() + 120, globalArea.getHeight());
         g.setColour (goldLight);
         g.setFont (font (look.bangers, 19.0f));
         g.drawText (k == &speed ? "SPEED" : "MIX", box.getX(), k->slider.getBottom() + 2, box.getWidth(), 18, juce::Justification::centred);
@@ -1051,18 +1053,21 @@ void MimicEditor::resized()
     for (auto [k, y] : { std::pair<Knob*, int> { &breaks, 96 }, { &throwKnob, 256 }, { &dynamicsKnob, 416 } })
         k->slider.setBounds (grooveColumn.getX() + 12, y, 76, 76);
 
-    wildButton.setBounds (670, 88, 158, 50);
-    fillButton.setBounds (828, 88, 158, 50);
-    speed.slider.setBounds (714, 156, 60, 60);
-    mix.slider.setBounds (878, 156, 60, 60);
+    // Speed and Mix on top (both modes), what it chews, then the mode
+    // switch sitting right on the panel of the mode's own settings.
+    globalArea = { 670, 80, 316, 104 };
+    speed.slider.setBounds (718, 90, 60, 60);
+    mix.slider.setBounds (876, 90, 60, 60);
 
-    chewsArea = { 670, 284, 316, 64 };
+    chewsArea = { 670, 216, 316, 64 };
 
     // Nine switches: five on top, four below.
     for (int i = 0; i < numContent; ++i)
         contents[i].button.setBounds (chewsArea.getX() + (i % 5) * 63 + (i >= 5 ? 32 : 0), chewsArea.getY() + (i / 5) * 34, 60, 30);
 
-    modeArea = { 670, 360, 316, 200 };
+    wildButton.setBounds (670, 296, 158, 48);
+    fillButton.setBounds (828, 296, 158, 48);
+    modeArea = { 670, 348, 316, 212 };
     const int mx = modeArea.getX() + 14, my = modeArea.getY() + 10;
 
     auto placePick = [] (Pick& p, int x, int y, int w)

@@ -115,7 +115,7 @@ private:
     Knob slicer, shaper, filter, pitcher, voiceTooth, possess;
     Switch inverts[numTeeth];
 
-    juce::Rectangle<int> chewsArea, modeArea, patternArea, grooveColumn;
+    juce::Rectangle<int> chewsArea, modeArea, patternArea, grooveColumn, globalArea;
     juce::Rectangle<int> grooveArea, throatArea, fillsArea, preyArea, preyMeter;
     juce::String presetShown;
     float lidOpen = 0.0f;       // smoothed lift, 0..1+

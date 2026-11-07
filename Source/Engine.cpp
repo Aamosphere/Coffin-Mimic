@@ -117,13 +117,15 @@ namespace mimic
 
             // Each material has its own versions of some switches. (Drums
             // keep theirs, and their scripts stay exactly as they were.)
-            if (kind == Kind::stutter && material == melodic && r.chance (0.55f))
+            if (kind == Kind::stutter && material == melodic && r.chance (0.75f))
                 kind = Kind::shards;
-            else if (kind == Kind::stutter && material == harmonic && r.chance (0.5f))
+            else if (kind == Kind::stutter && material == harmonic && r.chance (0.65f))
                 kind = Kind::fog;
-            else if (kind == Kind::grains && material == harmonic && r.chance (0.6f))
+            else if (kind == Kind::grains && material == harmonic && r.chance (0.8f))
                 kind = Kind::fog;
-            else if (kind == Kind::roll && (material == melodic || material == vocal) && r.chance (0.6f))
+            else if (kind == Kind::roll && (material == melodic || material == vocal) && r.chance (0.8f))
+                kind = Kind::bend;
+            else if (kind == Kind::stutter && material == vocal && r.chance (0.25f))
                 kind = Kind::bend;
 
             Segment s;
@@ -573,9 +575,15 @@ namespace mimic
 
         auto wrap = [barSteps] (int v) { return ((v % barSteps) + barSteps) % barSteps; };
 
-        if (isEnabled (g, Kind::slice))
+        // The masher is the drums' backbone. On a melody, pads or a voice
+        // it does a third as much, and the material's own events (shards,
+        // bends, fog...) carry the pattern instead.
+        const bool drums = g.material == percussive;
+        const bool mashing = isEnabled (g, Kind::slice);
+
+        if (mashing)
         {
-            const int ops = juce::roundToInt (I * (float) spanSteps * 0.22f + r.uni() * 1.5f * I);
+            const int ops = juce::roundToInt ((drums ? 1.0f : 0.35f) * (I * (float) spanSteps * 0.22f + r.uni() * 1.5f * I));
             bool downbeatDone = false;
 
             for (int o = 0; o < ops; ++o)
@@ -644,8 +652,9 @@ namespace mimic
         }
 
         // Then events on top, sparser when the masher is doing the work.
-        const float density = isEnabled (g, Kind::slice) ? 0.01f + 0.22f * std::pow (I, 1.6f)
-                                                         : 0.02f + 0.55f * std::pow (I, 1.5f);
+        const float density = ! drums ? 0.04f + 0.6f * std::pow (I, 1.3f)
+                            : mashing ? 0.01f + 0.22f * std::pow (I, 1.6f)
+                                      : 0.02f + 0.55f * std::pow (I, 1.5f);
 
         while (at < spanSteps)
         {

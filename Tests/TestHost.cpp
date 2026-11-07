@@ -176,9 +176,13 @@ namespace
         unsigned kindsSeen = 0;    // one bit per mimic::Kind heard at block ends
         double firstFillPpq = -1.0;
         std::vector<double> fillStarts, possessAt;
+        std::vector<std::pair<double, int>> kinds;   // block-end ppq and the kind playing
         int restBlocks = 0, loudRestBlocks = 0;   // blocks the shown script says are a Break
         float loudestRest = 0.0f;
     };
+
+    // Called before every block when set: changes made while playing.
+    std::function<void (MimicProcessor&, double ppq)> blockHook;
 
     void setParam (MimicProcessor& p, const char* id, float plain)
     {
@@ -248,6 +252,9 @@ namespace
 
             const int possessBefore = p.possessCount.load();
 
+            if (blockHook)
+                blockHook (p, head.ppq);
+
             p.processBlock (block, m);
 
             // Engagement is reported per block, so a block next to an engaged
@@ -257,6 +264,7 @@ namespace
             wasEngaged = engagedNow;
 
             res.kindsSeen |= 1u << juce::jlimit (0, 31, p.kindOut.load());
+            res.kinds.push_back ({ head.ppq, p.kindOut.load() });
 
             if (p.possessCount.load() != possessBefore)
                 res.possessAt.push_back (p.lastPossessPpq.load());
@@ -454,7 +462,8 @@ int main (int argc, char** argv)
         const int bar = (int) (sampleRate * 2.0);
         int differing = 0;
 
-        for (int pass = 2; pass < 8; ++pass)
+        // From the third pass: on the first, Auto is still learning the track.
+        for (int pass = 3; pass < 9; ++pass)
         {
             float diff = 0.0f;
 
@@ -772,6 +781,55 @@ int main (int argc, char** argv)
             std::printf ("echo on %-8s             %s heard 0x%04x, peak %.2f, jump x%.1f\n", name, good ? "ok  " : "FAIL", r.kindsSeen, r.peak, r.maxJump);
             writeWav (folder.getChildFile (juce::String ("echo - ") + name + ".wav"), r.out);
         }
+    }
+
+    // Switching the material while playing changes the pattern at once:
+    // the melody played as drums for 4 bars, then picked as a melody.
+    {
+        blockHook = [] (MimicProcessor& p, double ppq)
+        {
+            setParam (p, mimic::ids::material, ppq < 16.0 ? (float) mimic::ids::materialPercussive : (float) mimic::ids::materialMelodic);
+        };
+
+        auto r = render (lead, [] (MimicProcessor& p)
+        {
+            setParam (p, mimic::ids::bite, 0.5f);
+            setParam (p, mimic::ids::variation, 3.0f);   // a pattern holds 8 bars
+        });
+        blockHook = nullptr;
+
+        double firstOwn = -1.0;
+        int ownBefore = 0;
+        for (auto [ppq, kind] : r.kinds)
+        {
+            const bool own = kind == (int) mimic::Kind::shards || kind == (int) mimic::Kind::bend;
+            if (own && ppq < 16.0) ++ownBefore;
+            if (own && ppq >= 16.0 && firstOwn < 0.0) firstOwn = ppq;
+        }
+
+        const bool good = ownBefore == 0 && firstOwn >= 16.0 && firstOwn < 20.0;
+        ok = ok && good;
+        std::printf ("material switched at ppq 16    %s first melody version at ppq %.2f (pattern holds 8 bars)\n", good ? "ok  " : "FAIL", firstOwn);
+    }
+
+    // How much of each material's own versions is heard, by Bite.
+    for (float bite : { 0.1f, 0.3f, 0.6f })
+    {
+        std::printf ("bite %3.0f %%: ", bite * 100.0f);
+
+        for (auto [name, in] : { std::pair<const char*, const juce::AudioBuffer<float>*> { "melody", &lead }, { "pad", &chords }, { "voice", &singer } })
+        {
+            auto r = render (*in, [bite] (MimicProcessor& p) { setParam (p, mimic::ids::bite, bite); });
+            int fx = 0, own = 0;
+            for (auto [ppq, kind] : r.kinds)
+            {
+                fx += kind != 0 ? 1 : 0;
+                own += kind >= (int) mimic::Kind::shards && kind <= (int) mimic::Kind::fog ? 1 : 0;
+            }
+            std::printf ("%s effects %2d %%, own versions %2d %%   ", name, 100 * fx / (int) r.kinds.size(), 100 * own / (int) r.kinds.size());
+        }
+
+        std::printf ("\n");
     }
 
     // Every factory preset on the drum loop, the melody and the pad.

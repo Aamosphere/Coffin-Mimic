@@ -145,6 +145,8 @@ private:
     int filterCountdown = 0;
     float pitchRatio = 1.0f, riserLevel = 0.0f, riserCoeff = 0.0f, glideCoeff = 0.0f, strikeFlash = 0.0f;
     int seedValue = 0;
+    int lastMaterial = -1;   // the material the pattern playing now was written for
+    bool rewrite = false;    // write the pattern playing now again (the material changed)
 
     // Mixing.
     float engage = 0.0f, engageStep = 0.0f, replaceMix = 1.0f, mixSmoothed = 1.0f, rampStep = 0.0f;

@@ -175,6 +175,7 @@ void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     player.prepare (sr, &history, &mainOnsets);
     shifter.prepare (sr);
     vocoder.prepare (sr);
+    lastMaterial = -1;
     echoDelay.prepare (sr);
     echoSend = 0.0f;
     echoAlive = 0;
@@ -550,6 +551,16 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     g.breaks = breaks;
     g.material = materialChoice == ids::materialAuto ? classifier.material() : materialChoice - 1;
 
+    // A new material (picked, or heard by Auto) takes effect at once: the
+    // pattern playing now is written again for it, from the same place.
+    if (g.material != lastMaterial)
+    {
+        if (lastMaterial >= 0)
+            rewrite = true;
+
+        lastMaterial = g.material;
+    }
+
     auto* left = main.getWritePointer (0);
     auto* right = numCh > 1 ? main.getWritePointer (1) : nullptr;
     auto midiIt = midi.cbegin();
@@ -754,13 +765,23 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             lastFillKey = key;
 
-            if (key != spanKey)
+            if (key != spanKey || rewrite)
             {
                 g.span = sLength;
                 g.intensity = intensity;
                 g.fill = inFill;
                 g.offsetInBar = offsetInBar;
+                const bool sameSpan = key == spanKey;
+                const auto before = script.signature();
+                const int playingIndex = segmentIndex;
                 startSpan (key, sStart, g, keep, seedKey);
+
+                // Written again for a new material: if it came out the
+                // same, the segment playing now just carries on.
+                if (sameSpan && script.signature() == before)
+                    segmentIndex = playingIndex;
+
+                rewrite = false;
             }
 
             const double pos = tl - spanStart;
