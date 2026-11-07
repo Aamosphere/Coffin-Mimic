@@ -21,6 +21,13 @@ namespace mimic
                     jassertfalse;
             }
 
+            // Every content on.
+            void all()
+            {
+                for (auto* id : ids::contentIds)
+                    set (id, 1.0f);
+            }
+
             // Turns on only the listed fill contents.
             void only (std::initializer_list<const char*> contents)
             {
@@ -61,7 +68,7 @@ namespace mimic
             using namespace ids;
 
             static const std::vector<Factory> presets {
-                { "Init", "fill", true, [] (Builder&) {} },
+                { "Init", "wild, subtle", false, [] (Builder&) {} },
 
                 // Fill machines: the track stays clean until the phrase ends.
                 { "Lurking Fill", "subtle, fill", true, [] (Builder& b)
@@ -109,6 +116,7 @@ namespace mimic
                 { "Breakcore Ambush", "broken, wild, fill", true, [] (Builder& b)
                 {
                     b.fill (1, lastHalfBar, 1.0f);
+                    b.all();
                     b.set (speed, 0.85f);
                     b.set (escalate, 1.0f);
                     b.set (seed, 666.0f);
@@ -124,6 +132,7 @@ namespace mimic
 
                 { "Swelling Jaws", "rising, echo, fill", true, [] (Builder& b)
                 {
+                    b.all();
                     b.set (throwAmount, 0.7f);
                     b.fill (3, lastBar, 0.75f);
                     b.only ({ useRoll, useReverse, useGate });
@@ -143,6 +152,7 @@ namespace mimic
                 { "Venetian Teeth", "broken, choppy", false, [] (Builder& b)
                 {
                     b.wild (0.95f, 0.6f);
+                    b.all();
                     b.set (filter, 0.0f);
                     b.set (seed, 1993.0f);
                 } },

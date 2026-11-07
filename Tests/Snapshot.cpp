@@ -15,7 +15,15 @@ int main (int argc, char** argv)
     editor->setVisible (true);
 
     if (auto* timer = dynamic_cast<juce::Timer*> (editor.get()))
-        timer->timerCallback();
+        for (int i = 0; i < 30; ++i)
+            timer->timerCallback();
+
+    // A third argument opens the Advanced page.
+    if (argc > 3)
+        for (auto* child : editor->getChildren())
+            if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "ADVANCED")
+                button->onClick();
+
 
     const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f);
     juce::File out (juce::String (argc > 1 ? argv[1] : "mimic.png"));

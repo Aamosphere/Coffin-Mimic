@@ -68,8 +68,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
         layout.add (std::make_unique<AudioParameterChoice> (ParameterID { id, 1 }, name, names, def));
     };
 
-    pick (ids::mode, "Mode", ids::modeNames, ids::modeFill);
-    add (ids::bite, "Bite", { 0.0f, 1.0f }, 0.5f, percent);
+    pick (ids::mode, "Mode", ids::modeNames, ids::modeWild);
+    add (ids::bite, "Bite", { 0.0f, 1.0f }, 0.1f, percent);
     add (ids::speed, "Speed", { 0.0f, 1.0f }, 0.6f, speedText);
     add (ids::mix, "Mix", { 0.0f, 1.0f }, 1.0f, percent);
     add (ids::output, "Output", { -24.0f, 12.0f }, 0.0f, db);
@@ -86,8 +86,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
     layout.add (std::make_unique<AudioParameterInt> (ParameterID { ids::triggerNote, 1 }, "Trigger Note", 0, 127, 36,
         AudioParameterIntAttributes().withStringFromValueFunction ([] (int v, int) { return MidiMessage::getMidiNoteName (v, true, true, 3); })));
 
+    // Out of the box the Mimic mashes, stutters and rolls.
     for (int i = 0; i < numContent; ++i)
-        toggle (ids::contentIds[i], ids::contentNames[i].toRawUTF8(), true);
+    {
+        const auto kind = contentKinds[i];
+        toggle (ids::contentIds[i], ids::contentNames[i].toRawUTF8(),
+                kind == Kind::slice || kind == Kind::stutter || kind == Kind::roll);
+    }
 
     pick (ids::prey, "Prey", ids::preyNames, ids::preySelf);
     pick (ids::material, "Material", ids::materialNames, ids::materialAuto);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Mimic VERSION 0.3.1)
+project(Mimic VERSION 0.4.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0")
 
@@ -38,10 +38,11 @@ target_sources(Mimic PRIVATE
     ${MIMIC_DSP_SOURCES}
     Source/PluginEditor.cpp)
 
-# Special Elite (Apache 2.0) and Bangers (SIL OFL 1.1), licences beside them.
+# Special Elite (Apache 2.0), Bangers and Eater (SIL OFL 1.1), licences beside them.
 juce_add_binary_data(MimicFonts SOURCES
     Resources/Fonts/SpecialElite-Regular.ttf
-    Resources/Fonts/Bangers-Regular.ttf)
+    Resources/Fonts/Bangers-Regular.ttf
+    Resources/Fonts/Eater-Regular.ttf)
 
 juce_generate_juce_header(Mimic)
 
