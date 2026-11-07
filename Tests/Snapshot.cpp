@@ -11,7 +11,7 @@ int main (int argc, char** argv)
         processor.presets.loadFactory (juce::String (argv[2]).getIntValue());
 
     processor.prepareToPlay (48000.0, 512);
-    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorIfNeeded());
+    std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
     editor->setVisible (true);
 
     if (auto* timer = dynamic_cast<juce::Timer*> (editor.get()))

@@ -58,7 +58,7 @@ private:
     MimicProcessor& mimicProcessor;
     Look look;
 
-    Knob bite, speed, mix, output, probability, anticipation, lure, slicer, shaper, filter, pitcher, monoBass;
+    Knob bite, speed, mix, output, probability, anticipation, lure, slicer, shaper, filter, pitcher, monoBass, swing, breaks, throwKnob;
     Pick mode, every, length, prey, material;
     Switch replace, escalate, keep, contents[mimic::numContent], inverts[4];
 

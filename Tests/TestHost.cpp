@@ -303,7 +303,8 @@ int main (int argc, char** argv)
         {
             const juce::AudioBuffer<float>* prey = factory[i].tags.contains ("sidechain") ? (buffer == &drumLoop ? &lead : &drumLoop) : nullptr;
             auto r = render (*buffer, [i] (MimicProcessor& p) { p.presets.loadFactory (i); }, prey, midiPrey ? &notes : nullptr);
-            report (factory[i].name + " / " + suffix, r, factory[i].fill);
+            // Echo presets let the reverb tail ring on after a fill.
+            report (factory[i].name + " / " + suffix, r, factory[i].fill && ! factory[i].tags.contains ("echo"));
             writeWav (folder.getChildFile (juce::String (i).paddedLeft ('0', 2) + " " + factory[i].name + " - " + suffix + ".wav"), r.out);
         }
     }

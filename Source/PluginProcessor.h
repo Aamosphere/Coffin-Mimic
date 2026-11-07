@@ -4,6 +4,7 @@
 #include "Parameters.h"
 #include "Engine.h"
 #include "Presets.h"
+#include "Reverb.h"
 
 class MimicProcessor : public juce::AudioProcessor
 {
@@ -52,6 +53,7 @@ public:
     std::atomic<float> toothOut[4] { 0.0f, 0.0f, 0.0f, 0.0f };   // slicer, shaper, filter, pitcher
     std::atomic<bool> sidechainMissing { false };
     std::atomic<bool> transportPlaying { false };
+    std::atomic<float> throwOut { 0.0f };          // a hit just went into the reverb
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
@@ -111,6 +113,19 @@ private:
     float dryPeak = 0.0f, wetPeak = 0.0f, peakAttack = 0.0f, peakRelease = 0.0f;
     mimic::Svf sideLow;
     float bassFrequency = -1.0f;
+
+    // Throw: now and then a hit is sent into the Gargoyle's reverb and its
+    // tail rings on. The reverb only runs while a tail is alive.
+    void flushThrow (float* left, float* right, int start, int count, float returnGain);
+    gargoyle::Reverb throwVerb;
+    mimic::OnsetDetector throwDetector;
+    mimic::Rng throwRng;
+    static constexpr int throwChunk = 256;
+    std::array<float, throwChunk> sendL {}, sendR {}, verbL {}, verbR {};
+    int sendCount = 0, sendStart = 0;
+    float sendEnv = 0.0f, sendAttack = 0.0f, sendRelease = 0.0f;
+    int sendHold = 0, verbAlive = 0, afterFill = 0;
+    float throwFlash = 0.0f, lastThrowDecay = -1.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MimicProcessor)
 };

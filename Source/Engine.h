@@ -44,8 +44,8 @@ namespace mimic
     //==========================================================================
     // A fill (or a bar of Wild mode) is a script of segments laid out in
     // quarter notes. The script is pure data, generated from a seed.
-    enum class Kind : uint8_t { pass, stutter, roll, reverse, scatter, tape, gate, grains };
-    inline constexpr int numContent = 7;   // every kind after pass
+    enum class Kind : uint8_t { pass, stutter, roll, reverse, scatter, tape, gate, grains, rest };
+    inline constexpr int numContent = 7;   // the switchable kinds after pass (rest is a Break)
 
     enum MaterialClass { percussive, melodic, harmonic };
 
@@ -64,7 +64,24 @@ namespace mimic
         bool highPass = false;
         float density = 1.0f;               // gate and grains
         float reverseChance = 0.0f, octaveChance = 0.0f;
+        float swing = 0.0f;                 // 0..0.5: odd repeats start late
+        float grainMin = 0.035f, grainMax = 0.135f;   // grain length range, seconds
+        std::array<int8_t, 4> arp {};       // semitones per repeat (melodic stutters)
+        int arpLength = 0;
         uint32_t seed = 0;
+
+        float arpRatio (int repeatIndex) const
+        {
+            return arpLength > 0 ? std::exp2 ((float) arp[(size_t) (repeatIndex % arpLength)] / 12.0f) : 1.0f;
+        }
+
+        float maxArpRatio() const
+        {
+            float m = 1.0f;
+            for (int i = 0; i < arpLength; ++i)
+                m = juce::jmax (m, std::exp2 ((float) arp[(size_t) i] / 12.0f));
+            return m;
+        }
     };
 
     struct Script
@@ -89,6 +106,8 @@ namespace mimic
         int material = percussive;
         unsigned enabled = 0x7f;    // one bit per content kind (stutter = bit 0)
         bool fill = true;           // a fill builds to a climax; Wild varies a bar
+        float swing = 0.0f;         // 0..0.5 of a step
+        float breaks = 0.0f;        // 0..1, how often a rest follows an event
     };
 
     void generate (Script&, const GenSettings&, uint64_t seed);
@@ -235,8 +254,11 @@ namespace mimic
         Kind kind() const { return current.kind; }
         bool active() const { return current.kind != Kind::pass; }
 
-        // passWeight: how much of the output is the untouched live input.
-        void render (int64_t now, float inL, float inR, float& outL, float& outR, float& passWeight);
+        struct Weights { float pass = 0.0f, rest = 0.0f; };
+
+        // Weights: how much of the output is the untouched live input, and
+        // how much is a Break (silence).
+        void render (int64_t now, float inL, float inR, float& outL, float& outR, Weights&);
 
     private:
         struct Grain
@@ -255,7 +277,7 @@ namespace mimic
             Segment seg;
             int64_t startNow = 0, lengthS = 1, endK = -1;
             double spq = 1.0;
-            double capture = 0.0, repeatS = 1.0, minRepeatS = 1.0, phase = 0.0;
+            double capture = 0.0, repeatS = 1.0, baseRepeatS = 1.0, minRepeatS = 1.0, phase = 0.0;
             int64_t repStart = 0;
             int repeatIndex = 0;
             float repGain = 1.0f, slotRate = 1.0f;
@@ -270,6 +292,7 @@ namespace mimic
         };
 
         void startRepeat (Voice&, int64_t now);
+        double swungRepeat (const Voice&, int index) const;
         void pickScatterSlot (Voice&, int64_t now);
         void pushTail();
         float fadeSamples (bool onsetAligned) const;

@@ -104,6 +104,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
     bassRange.setSkewForCentre (100.0f);
     add (ids::monoBass, "Mono Bass", bassRange, 120.0f, hz);
 
+    auto swingText = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (50.0f + 25.0f * v)) + " %"; });
+    add (ids::swing, "Swing", { 0.0f, 1.0f }, 0.0f, swingText);
+    add (ids::breaks, "Breaks", { 0.0f, 1.0f }, 0.0f, percent);
+    add (ids::throwAmount, "Throw", { 0.0f, 1.0f }, 0.0f, percent);
+
     return layout;
 }
 
@@ -179,6 +184,15 @@ void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     freePpq = 0.0;
     discontinuity();
 
+    throwVerb.prepare (sr);
+    throwDetector.prepare (sr);
+    sendAttack = 1.0f / (float) (0.001 * sr);
+    sendRelease = 1.0f / (float) (0.015 * sr);
+    sendEnv = 0.0f;
+    sendHold = verbAlive = afterFill = 0;
+    sendCount = sendStart = 0;
+    lastThrowDecay = -1.0f;
+
     setLatencySamples (0);
 }
 
@@ -215,6 +229,7 @@ void MimicProcessor::startSpan (int64_t key, double start, const GenSettings& g,
     }
 
     slicerRng = Rng (hash64 (seed, 5));
+    throwRng = Rng (hash64 (seed, 6));
 }
 
 void MimicProcessor::reroll()
@@ -282,6 +297,30 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const bool slicerInvert = flag (ids::slicerInvert), shaperInvert = flag (ids::shaperInvert);
     const bool filterInvert = flag (ids::filterInvert), pitcherInvert = flag (ids::pitcherInvert);
     const float monoBass = value (ids::monoBass);
+    const float swing = value (ids::swing);
+    const float breaks = value (ids::breaks);
+    const float throwAmount = value (ids::throwAmount);
+
+    if (throwAmount > 0.0f && std::abs (throwAmount - lastThrowDecay) > 0.01f)
+    {
+        lastThrowDecay = throwAmount;
+        gargoyle::Reverb::Settings rs;
+        rs.space = 0;
+        rs.size = 0.75f;
+        rs.decay = 2.0f + 4.0f * throwAmount;
+        rs.early = 0.4f;
+        rs.predelayMs = 25.0f;
+        rs.lows = 0.8f;
+        rs.highs = 0.75f;
+        rs.diffuse = 0.85f;
+        rs.drift = 0.5f;
+        rs.brightness = 6500.0f;
+        throwVerb.setSettings (rs);
+    }
+
+    const float throwReturn = 0.4f + 0.4f * throwAmount;
+    sendStart = 0;
+    sendCount = 0;
     seedValue = (int) value (ids::seed);
 
     unsigned enabled = 0;
@@ -382,6 +421,8 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     g.bar = barLen;
     g.step = step;
     g.enabled = enabled;
+    g.swing = 0.5f * swing;
+    g.breaks = breaks;
     g.material = materialChoice == ids::materialAuto ? classifier.material() : materialChoice - 1;
 
     auto* left = main.getWritePointer (0);
@@ -547,7 +588,10 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             fillProgress = (float) juce::jlimit (0.0, 1.0, (tl - sStart) / sLength);
 
         if (wasInFill && ! inFill)
+        {
             ++fillsInRow;
+            afterFill = (int) (0.25 * spq);   // the downbeat after a fill can be thrown
+        }
 
         wasInFill = inFill;
 
@@ -609,14 +653,18 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             strikeFlash = 1.0f;
         }
 
-        float wl, wr, passWeight;
-        player.render (now, inL, inR, wl, wr, passWeight);
+        float wl, wr;
+        Player::Weights weights;
+        player.render (now, inL, inR, wl, wr, weights);
+        const float passWeight = weights.pass;
 
         // Replace swaps the track for the fill; Add lays the fill on top.
         replaceMix = replace ? juce::jmin (1.0f, replaceMix + rampStep) : juce::jmax (0.0f, replaceMix - rampStep);
         const float fxL = wl - inL * passWeight, fxR = wr - inR * passWeight;
-        float sl = replaceMix * wl + (1.0f - replaceMix) * (inL + 0.55f * fxL);
-        float sr2 = replaceMix * wr + (1.0f - replaceMix) * (inR + 0.55f * fxR);
+        // A Break silences the track in Add mode too.
+        const float keepDry = 1.0f - juce::jmin (1.0f, weights.rest);
+        float sl = replaceMix * wl + (1.0f - replaceMix) * (inL * keepDry + 0.55f * fxL);
+        float sr2 = replaceMix * wr + (1.0f - replaceMix) * (inR * keepDry + 0.55f * fxR);
 
         // Shaper: the prey's envelope shapes the level.
         if (shaperAmount > 0.0f)
@@ -711,10 +759,52 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         const float dl = inL, dr = inR;
 
         const float k = engage * mixSmoothed;
-        left[i] = (dl * (1.0f - k) + sl * k) * outGain;
+        const float yl = dl * (1.0f - k) + sl * k, yr = dr * (1.0f - k) + sr2 * k;
+        left[i] = yl * outGain;
 
         if (right != nullptr)
-            right[i] = (dr * (1.0f - k) + sr2 * k) * outGain;
+            right[i] = yr * outGain;
+
+        // Throw: pick a hit now and then and send it into the reverb.
+        if (throwAmount > 0.0f || verbAlive > 0)
+        {
+            const bool hit = throwDetector.process (0.5f * (yl + yr));
+
+            if (afterFill > 0)
+                --afterFill;
+
+            if (hit && throwAmount > 0.0f && sendHold <= 0)
+            {
+                const float chance = afterFill > 0 ? throwAmount
+                                   : engage > 0.5f ? throwAmount * (wild ? 0.2f : 0.35f) : 0.0f;
+
+                if (throwRng.chance (chance))
+                {
+                    sendHold = (int) (0.5 * spq);   // an eighth note of the hit
+                    afterFill = 0;
+                    verbAlive = (int) ((2.0f * (2.0f + 4.0f * throwAmount) + 1.0f) * (float) sr);
+                    throwFlash = 1.0f;
+                }
+            }
+
+            sendEnv = sendHold > 0 ? juce::jmin (1.0f, sendEnv + sendAttack) : juce::jmax (0.0f, sendEnv - sendRelease);
+
+            if (sendHold > 0)
+                --sendHold;
+
+            if (sendCount == 0)
+                sendStart = i;
+
+            sendL[(size_t) sendCount] = yl * sendEnv;
+            sendR[(size_t) sendCount] = yr * sendEnv;
+
+            if (++sendCount == throwChunk)
+                flushThrow (left, right, sendStart, sendCount, throwReturn * outGain);
+        }
+        else if (sendCount > 0)
+        {
+            flushThrow (left, right, sendStart, sendCount, throwReturn * outGain);
+        }
 
         if (inFill || antProgress > 0.0f)
         {
@@ -724,6 +814,12 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
         strikeFlash *= 0.9995f;
     }
+
+    if (sendCount > 0)
+        flushThrow (left, right, sendStart, sendCount, throwReturn * outGain);
+
+    throwFlash *= 0.8f;
+    throwOut.store (throwFlash, std::memory_order_relaxed);
 
     expectedPpq = base + numSamples * ppqPerSample;
     freePpq = playing ? expectedPpq : freePpq + numSamples * ppqPerSample;
@@ -745,6 +841,32 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     toothOut[1].store (shaperAmount * teethShown, std::memory_order_relaxed);
     toothOut[2].store (filterAmount * teethShown, std::memory_order_relaxed);
     toothOut[3].store (preySource == ids::preyMidi ? pitcherAmount * teethShown : 0.0f, std::memory_order_relaxed);
+}
+
+void MimicProcessor::flushThrow (float* left, float* right, int start, int count, float returnGain)
+{
+    if (verbAlive <= 0)
+    {
+        sendCount = 0;
+        return;
+    }
+
+    throwVerb.process (sendL.data(), sendR.data(), verbL.data(), verbR.data(), count);
+
+    for (int n = 0; n < count; ++n)
+    {
+        left[start + n] += verbL[(size_t) n] * returnGain;
+
+        if (right != nullptr)
+            right[start + n] += verbR[(size_t) n] * returnGain;
+    }
+
+    sendCount = 0;
+    verbAlive = juce::jmax (0, verbAlive - count);
+
+    // The tail has died away: stop the reverb until the next throw.
+    if (verbAlive == 0)
+        throwVerb.reset();
 }
 
 void MimicProcessor::getStateInformation (juce::MemoryBlock& destData)

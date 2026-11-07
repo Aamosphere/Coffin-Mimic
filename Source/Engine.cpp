@@ -53,13 +53,20 @@ namespace mimic
             return Kind::pass;
         }
 
-        // Repeat length in steps: the wilder, the shorter.
-        double pickRepeat (Rng& r, double step, float intensity)
+        // Repeat length in steps: the wilder, the shorter. Melodic and
+        // harmonic material leans to longer, echo-like repeats.
+        double pickRepeat (Rng& r, double step, float intensity, int material)
         {
-            constexpr double options[] { 2.0, 1.0, 2.0 / 3.0, 0.5, 1.0 / 3.0, 0.25, 0.125 };
-            const float centre = 0.6f + intensity * 4.6f + r.range (-1.3f, 1.3f);
-            return step * options[juce::jlimit (0, 6, juce::roundToInt (centre))];
+            constexpr double options[] { 3.0, 2.0, 1.5, 1.0, 2.0 / 3.0, 0.5, 1.0 / 3.0, 0.25, 0.125 };
+            const float lean = material == percussive ? 1.6f : (material == melodic ? 0.4f : 0.0f);
+            const float centre = 1.2f + lean + intensity * 4.6f + r.range (-1.3f, 1.3f);
+            return step * options[juce::jlimit (0, 8, juce::roundToInt (centre))];
         }
+
+        // Arpeggio shapes for melodic stutters, in semitones per repeat.
+        constexpr int8_t arps[][4] {
+            { 0, 12, 7, 19 }, { 0, 7, 12, 7 }, { 0, -12, 0, 12 }, { 0, 3, 7, 12 }, { 0, 5, 7, 12 }, { 12, 7, 0, -5 }
+        };
 
         Segment makeSegment (Kind kind, double start, double length, float intensity, const GenSettings& g, Rng& r)
         {
@@ -68,17 +75,33 @@ namespace mimic
             s.length = length;
             s.kind = kind;
             s.step = g.step;
+            s.swing = g.swing;
             s.seed = r.next();
             s.reach = g.bar * (double) (1 + r.below (intensity > 0.5f ? 4 : 2));
             const float I = intensity;
+            const int m = g.material;
 
             switch (kind)
             {
                 case Kind::stutter:
                 {
-                    s.repeat = juce::jmin (length, pickRepeat (r, g.step, I));
+                    s.repeat = juce::jmin (length, pickRepeat (r, g.step, I, m));
 
-                    if (r.chance (0.3f * I))
+                    if (m == melodic && r.chance (0.35f + 0.4f * I))
+                    {
+                        // Each repeat jumps to the next note of an arpeggio.
+                        const auto& shape = arps[r.below ((int) std::size (arps))];
+                        std::copy (std::begin (shape), std::end (shape), s.arp.begin());
+                        s.arpLength = 2 + r.below (3);
+                        s.repeat = juce::jmin (length, g.step * (I > 0.6f ? 0.5 : 1.0));
+                    }
+                    else if (m != percussive && r.chance (0.5f))
+                    {
+                        // Echo: dotted or straight eighths fading out.
+                        s.repeat = juce::jmin (length, r.chance (0.5f) ? 0.75 : 0.5);
+                        s.decay = r.range (0.6f, 0.82f);
+                    }
+                    else if (r.chance (0.3f * I))
                     {
                         constexpr float semis[] { 12.0f, -12.0f, 7.0f, -5.0f, 5.0f };
                         s.rateStart = s.rateEnd = std::exp2 (semis[r.below (5)] / 12.0f);
@@ -87,39 +110,40 @@ namespace mimic
                     if (r.chance (0.25f * I))
                         s.rateEnd = s.rateStart * (r.chance (0.5f) ? 2.0f : 0.5f);
 
-                    if (r.chance (0.4f))
+                    if (s.decay >= 1.0f && r.chance (0.4f))
                         s.decay = r.range (0.78f, 0.97f);
                     break;
                 }
 
                 case Kind::roll:
-                    s.repeat = juce::jmin (length, g.step * (I > 0.6f ? 0.5 : 1.0));
-                    s.shrink = r.range (0.6f, 0.85f);
+                    s.repeat = juce::jmin (length, g.step * (I > 0.6f || m == percussive ? 0.5 : 1.0));
+                    s.shrink = m == percussive ? r.range (0.55f, 0.75f) : r.range (0.7f, 0.88f);
                     s.gainStart = r.range (0.45f, 0.7f);
 
-                    if (r.chance (0.5f * I))
+                    if (r.chance ((m == percussive ? 0.5f : 0.3f) * I))
                         s.rateEnd = std::exp2 (r.range (2.0f, 12.0f) / 12.0f);
                     break;
 
                 case Kind::reverse:
-                    s.repeat = (length > g.step && r.chance (0.3f + 0.4f * I))
-                                 ? juce::jmin (length, juce::jmax (g.step, pickRepeat (r, g.step, I)))
+                    s.repeat = (length > g.step && r.chance ((m == harmonic ? 0.1f : 0.3f) + 0.4f * I))
+                                 ? juce::jmin (length, juce::jmax (g.step, pickRepeat (r, g.step, I, m)))
                                  : length;
 
-                    if (r.chance (0.2f * I))
+                    if (r.chance ((m == melodic ? 0.35f : 0.2f) * I))
                         s.rateStart = s.rateEnd = r.chance (0.5f) ? 2.0f : 0.5f;
                     break;
 
                 case Kind::scatter:
-                    s.repeat = juce::jmin (length, r.chance (I) ? g.step * 0.5 : g.step);
-                    s.reverseChance = 0.3f * I;
-                    s.octaveChance = 0.25f * I;
+                    s.repeat = m == percussive ? juce::jmin (length, r.chance (I) ? g.step * 0.5 : g.step)
+                                               : juce::jmin (length, r.chance (0.5f) ? g.step * 2.0 : g.step);
+                    s.reverseChance = (m == harmonic ? 0.45f : 0.3f) * I;
+                    s.octaveChance = (m == melodic ? 0.45f : 0.25f) * I;
                     break;
 
                 case Kind::tape:
                     s.repeat = length;
 
-                    if (g.material != percussive && r.chance (0.45f))
+                    if (m != percussive && r.chance (m == melodic ? 0.6f : 0.4f))
                     {
                         s.rateEnd = r.chance (0.5f) ? 2.0f : 0.5f;   // glide
                     }
@@ -131,24 +155,50 @@ namespace mimic
                     break;
 
                 case Kind::gate:
-                    s.repeat = g.step * (r.chance (0.2f) ? 2.0 / 3.0 : (r.chance (I) ? 0.5 : 1.0));
-                    s.density = r.range (0.35f, 0.8f);
+                    s.repeat = g.step * (r.chance (0.2f) ? 2.0 / 3.0 : (r.chance (I) || m == harmonic ? 0.5 : 1.0));
+                    s.density = m == harmonic ? r.range (0.55f, 0.85f) : r.range (0.35f, 0.8f);
                     break;
 
                 case Kind::grains:
-                    s.repeat = r.chance (0.35f) ? 0.06 : g.beat * (double) r.range (0.5f, 2.0f);
-                    s.density = juce::jlimit (0.2f, 1.0f, 0.3f + 0.7f * I * r.range (0.7f, 1.0f));
-                    s.octaveChance = (g.material == percussive ? 0.2f : 0.5f) * I + 0.1f;
-                    s.reverseChance = 0.25f * I;
+                    if (m == percussive)
+                    {
+                        // Micro-grains: a fizzing, bitty texture of the hits.
+                        s.grainMin = 0.010f;
+                        s.grainMax = 0.035f;
+                        s.repeat = g.step * (double) r.range (1.0f, 4.0f);
+                        s.density = juce::jlimit (0.3f, 1.0f, 0.5f + 0.5f * I);
+                        s.octaveChance = 0.15f * I;
+                    }
+                    else if (m == melodic)
+                    {
+                        s.grainMin = 0.04f;
+                        s.grainMax = 0.12f;
+                        s.repeat = r.chance (0.3f) ? 0.06 : g.beat * (double) r.range (0.5f, 1.5f);
+                        s.density = juce::jlimit (0.2f, 1.0f, 0.3f + 0.6f * I);
+                        s.octaveChance = 0.35f + 0.3f * I;
+                    }
+                    else
+                    {
+                        // Long, overlapping grains, often frozen, with an
+                        // octave-up shimmer.
+                        s.grainMin = 0.08f;
+                        s.grainMax = 0.25f;
+                        s.repeat = r.chance (0.6f) ? 0.08 : g.beat * (double) r.range (1.0f, 2.0f);
+                        s.density = juce::jlimit (0.4f, 1.0f, 0.55f + 0.45f * I);
+                        s.octaveChance = 0.45f + 0.3f * I;
+                    }
+
+                    s.reverseChance = (m == harmonic ? 0.35f : 0.25f) * I;
                     break;
 
                 case Kind::pass:
+                case Kind::rest:
                     break;
             }
 
             // Filter sweeps: a closing low-pass, or a high-pass opening up
-            // like a riser.
-            if (kind != Kind::pass && r.chance (0.15f + 0.35f * I))
+            // like a riser. Pads and chords get more of them.
+            if (r.chance ((m == harmonic ? 0.3f : 0.15f) + 0.35f * I))
             {
                 if (r.chance (0.5f))
                 {
@@ -164,6 +214,21 @@ namespace mimic
             return s;
         }
 
+        Segment restSegment (double start, double length)
+        {
+            Segment s;
+            s.start = start;
+            s.length = length;
+            s.kind = Kind::rest;
+            return s;
+        }
+
+        // Grid position of step i, with the odd steps of each pair late.
+        double gridAt (int i, double step, float swing)
+        {
+            return (double) (i / 2) * 2.0 * step + ((i & 1) ? step * (1.0 + swing) : 0.0);
+        }
+
         Segment passSegment (double start, double length)
         {
             Segment s;
@@ -174,11 +239,11 @@ namespace mimic
 
         void addOrMerge (Script& script, const Segment& s)
         {
-            if (s.kind == Kind::pass && script.count > 0)
+            if ((s.kind == Kind::pass || s.kind == Kind::rest) && script.count > 0)
             {
                 auto& last = script.segments[(size_t) script.count - 1];
 
-                if (last.kind == Kind::pass)
+                if (last.kind == s.kind)
                 {
                     last.length += s.length;
                     return;
@@ -223,13 +288,31 @@ namespace mimic
         script.clear();
         Rng r (seed);
         const float I = juce::jlimit (0.0f, 1.0f, g.intensity);
+        const float swing = juce::jlimit (0.0f, 0.5f, g.swing);
         const double step = juce::jmax (1.0 / 64.0, g.step);
-        const int spanSteps = juce::jmax (1, (int) std::floor (g.span / step + 1.0e-6));
+        int spanSteps = juce::jmax (1, (int) std::floor (g.span / step + 1.0e-6));
         Kind previous = Kind::pass;
         int at = 0;
 
+        // Start and end of a run of steps on the swung grid; the last step
+        // always reaches the end of the span.
+        const int totalSteps = spanSteps;
+        auto startOf = [&] (int i) { return gridAt (i, step, swing); };
+        auto endOf = [&] (int i) { return i >= totalSteps ? g.span : gridAt (i, step, swing); };
+
+        auto addRest = [&] (int from, int steps)
+        {
+            addOrMerge (script, restSegment (startOf (from), endOf (from + steps) - startOf (from)));
+        };
+
         if (g.fill)
         {
+            // A Break right before the downbeat: the fill ends in silence.
+            const bool endRest = spanSteps > 2 && r.chance (g.breaks * 0.7f);
+
+            if (endRest)
+                --spanSteps;
+
             // Phrases that get shorter and wilder towards the end of the fill.
             while (at < spanSteps)
             {
@@ -241,25 +324,36 @@ namespace mimic
                     --steps;
 
                 const bool last = steps == remaining;
-                const double start = at * step, length = last ? g.span - start : steps * step;
-                const float progress = (float) ((start + length) / g.span);
+                const double start = startOf (at);
+                const double end = (last && ! endRest) ? g.span : endOf (at + steps);
+                const float progress = (float) (end / g.span);
                 const float local = I * (0.55f + 0.45f * progress);
 
                 if (! last && r.chance (0.5f * (1.0f - I) * (1.0f - I)))
                 {
-                    addOrMerge (script, passSegment (start, length));
+                    addOrMerge (script, passSegment (start, end - start));
                     previous = Kind::pass;
                 }
                 else
                 {
                     const auto kind = pickKind (r, g, last && I > 0.45f, previous);
-                    addOrMerge (script, kind == Kind::pass ? passSegment (start, length)
-                                                           : makeSegment (kind, start, length, local, g, r));
+                    addOrMerge (script, kind == Kind::pass ? passSegment (start, end - start)
+                                                           : makeSegment (kind, start, end - start, local, g, r));
                     previous = kind;
                 }
 
                 at += steps;
+
+                // Breaks: a step of silence after the chewing.
+                if (previous != Kind::pass && at < spanSteps - 1 && r.chance (g.breaks * 0.6f))
+                {
+                    addRest (at, 1);
+                    ++at;
+                }
             }
+
+            if (endRest)
+                addRest (spanSteps, 1);
         }
         else
         {
@@ -269,23 +363,28 @@ namespace mimic
 
             while (at < spanSteps)
             {
-                const double start = at * step;
                 const float position = (float) at / (float) spanSteps;
 
                 if (r.chance (density * (0.6f + 0.8f * position)))
                 {
                     const int steps = juce::jmin (spanSteps - at, 1 + r.below (I < 0.35f ? 2 : 4));
-                    const double length = at + steps == spanSteps ? g.span - start : steps * step;
+                    const double start = startOf (at), end = endOf (at + steps);
                     const auto kind = pickKind (r, g, false, previous);
-                    addOrMerge (script, kind == Kind::pass ? passSegment (start, length)
-                                                           : makeSegment (kind, start, length, I * r.range (0.7f, 1.1f), g, r));
+                    addOrMerge (script, kind == Kind::pass ? passSegment (start, end - start)
+                                                           : makeSegment (kind, start, end - start, I * r.range (0.7f, 1.1f), g, r));
                     previous = kind;
                     at += steps;
+
+                    if (kind != Kind::pass && at < spanSteps && r.chance (g.breaks * 0.7f))
+                    {
+                        const int rest = juce::jmin (spanSteps - at, 1 + r.below (2));
+                        addRest (at, rest);
+                        at += rest;
+                    }
                 }
                 else
                 {
-                    const double length = at + 1 == spanSteps ? g.span - start : step;
-                    addOrMerge (script, passSegment (start, length));
+                    addOrMerge (script, passSegment (startOf (at), endOf (at + 1) - startOf (at)));
                     previous = Kind::pass;
                     ++at;
                 }
@@ -617,9 +716,10 @@ namespace mimic
         v.lengthS = juce::jmax ((int64_t) 1, lengthSamples);
         v.spq = spq;
         v.minRepeatS = juce::jmax (0.004 * sr, spq * 0.03125);
-        v.repeatS = juce::jmax (v.minRepeatS, seg.repeat * spq);
+        v.baseRepeatS = juce::jmax (v.minRepeatS, seg.repeat * spq);
+        v.repeatS = swungRepeat (v, 0);
 
-        const double maxRate = juce::jmax (std::abs (seg.rateStart), std::abs (seg.rateEnd));
+        const double maxRate = juce::jmax (std::abs (seg.rateStart), std::abs (seg.rateEnd)) * seg.maxArpRatio();
         const double preroll = 0.0012 * sr;
         bool aligned = false;
 
@@ -628,7 +728,7 @@ namespace mimic
             case Kind::stutter:
             case Kind::roll:
             {
-                const double back = v.repeatS * juce::jmax (0.0, maxRate - 1.0);
+                const double back = v.baseRepeatS * 1.5 * juce::jmax (0.0, maxRate - 1.0);
                 v.capture = onsets->snap ((double) now - back, v.repeatS * 0.35, preroll, &aligned);
                 break;
             }
@@ -652,11 +752,12 @@ namespace mimic
                 break;
 
             case Kind::grains:
-                v.capture = (double) now - v.repeatS - 0.35 * sr;
+                v.capture = (double) now - v.repeatS - (2.0 * seg.grainMax * 1.3 + 0.02) * sr;
                 break;
 
             case Kind::gate:
             case Kind::pass:
+            case Kind::rest:
                 break;
         }
 
@@ -682,6 +783,17 @@ namespace mimic
         v.capture = onsets->snap ((double) now - back, v.repeatS * 0.3, 0.0012 * sr);
     }
 
+    double Player::swungRepeat (const Voice& v, int index) const
+    {
+        const bool swings = v.seg.swing > 0.0f && (v.kind == Kind::stutter || v.kind == Kind::scatter)
+                         && v.seg.repeat <= v.seg.step * 1.01 && v.seg.arpLength == 0;
+
+        if (! swings)
+            return v.baseRepeatS;
+
+        return v.baseRepeatS * ((index & 1) ? 1.0 - v.seg.swing : 1.0 + v.seg.swing);
+    }
+
     void Player::startRepeat (Voice& v, int64_t now)
     {
         pushTail();
@@ -692,6 +804,8 @@ namespace mimic
 
         if (v.kind == Kind::roll)
             v.repeatS = juce::jmax (v.minRepeatS, v.repeatS * v.seg.shrink);
+        else
+            v.repeatS = swungRepeat (v, v.repeatIndex);
 
         if (v.kind == Kind::scatter)
             pickScatterSlot (v, now);
@@ -741,6 +855,7 @@ namespace mimic
             case Kind::tape:
             case Kind::gate:
             case Kind::grains:
+            case Kind::rest:
                 break;
         }
     }
@@ -767,7 +882,7 @@ namespace mimic
 
         Rng r (hash64 (v.seg.seed, v.grainCount++));
         const float d = v.seg.density;
-        const int length = juce::jmax (64, (int) (sr * (0.035 + 0.1 * (1.0 - 0.6 * d)) * r.range (0.7f, 1.3f)));
+        const int length = juce::jmax (64, (int) (sr * r.range (v.seg.grainMin, v.seg.grainMax)));
         v.spawnCountdown = juce::jmax (16, (int) ((float) length / (1.0f + 6.0f * d) * r.range (0.6f, 1.4f)));
 
         if (g == nullptr)
@@ -808,12 +923,16 @@ namespace mimic
                 r = inR;
                 return;
 
+            case Kind::rest:
+                l = r = 0.0f;
+                return;
+
             case Kind::stutter:
             case Kind::roll:
             case Kind::reverse:
             case Kind::scatter:
             {
-                const double rate = std::abs (rateAt (v, p) * v.slotRate);
+                const double rate = std::abs (rateAt (v, p) * v.slotRate * s.arpRatio (v.repeatIndex));
                 const double pos = v.reversed ? v.capture + v.repeatS * rate - v.phase : v.capture + v.phase;
                 v.phase += rate;
                 l = history->read (0, pos, now);
@@ -833,12 +952,18 @@ namespace mimic
 
             case Kind::gate:
             {
-                const auto step = (int64_t) juce::jmax (1.0, v.repeatS);
-                const auto index = k / step;
-                const float t = (float) (k % step);
+                // Steps in swung pairs: the first of each pair is longer.
+                const double stepS = juce::jmax (1.0, v.repeatS);
+                const double pair = 2.0 * stepS, first = stepS * (1.0 + s.swing);
+                const auto pairIndex = (int64_t) ((double) k / pair);
+                const double inPair = (double) k - (double) pairIndex * pair;
+                const bool second = inPair >= first;
+                const auto index = pairIndex * 2 + (second ? 1 : 0);
+                const float t = (float) (second ? inPair - first : inPair);
+                const float length = (float) (second ? pair - first : first);
                 const bool on = index == 0 || (float) (hash64 (s.seed, (uint64_t) index) >> 40) * (1.0f / 16777216.0f) < s.density;
                 const float attack = (float) (0.0005 * sr), release = (float) (0.004 * sr);
-                const float g = on ? juce::jmin (1.0f, t / attack) * juce::jlimit (0.0f, 1.0f, ((float) step * 0.9f - t) / release) : 0.0f;
+                const float g = on ? juce::jmin (1.0f, t / attack) * juce::jlimit (0.0f, 1.0f, (length * 0.9f - t) / release) : 0.0f;
                 l = inL * g;
                 r = inR * g;
                 break;
@@ -891,10 +1016,10 @@ namespace mimic
         r *= gain;
     }
 
-    void Player::render (int64_t now, float inL, float inR, float& outL, float& outR, float& passWeight)
+    void Player::render (int64_t now, float inL, float inR, float& outL, float& outR, Weights& w)
     {
         outL = outR = 0.0f;
-        passWeight = 0.0f;
+        w = {};
 
         if (current.endK >= 0 && now - current.startNow >= current.endK)
             beginPass (now);
@@ -911,7 +1036,9 @@ namespace mimic
         outR += r * current.fade;
 
         if (current.kind == Kind::pass)
-            passWeight += current.fade;
+            w.pass += current.fade;
+        else if (current.kind == Kind::rest)
+            w.rest += current.fade;
 
         current.fade = juce::jmin (1.0f, current.fade + current.fadeStep);
 
@@ -925,7 +1052,9 @@ namespace mimic
             outR += r * t.fade;
 
             if (t.kind == Kind::pass)
-                passWeight += t.fade;
+                w.pass += t.fade;
+            else if (t.kind == Kind::rest)
+                w.rest += t.fade;
 
             t.fade -= t.fadeStep;
 

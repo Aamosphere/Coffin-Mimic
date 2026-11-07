@@ -51,6 +51,11 @@ namespace mimic::ids
     // Safety
     inline constexpr const char* monoBass     = "monoBass";
 
+    // v0.2: groove, rests and the reverb throw
+    inline constexpr const char* swing        = "swing";
+    inline constexpr const char* breaks       = "breaks";
+    inline constexpr const char* throwAmount  = "throw";
+
     enum Mode { modeWild, modeFill };
     inline const juce::StringArray modeNames { "Wild", "Fill" };
 

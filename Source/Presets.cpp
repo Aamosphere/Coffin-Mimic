@@ -69,6 +69,7 @@ namespace mimic
                     b.fill (2, lastBeat, 0.3f);
                     b.only ({ useStutter, useReverse, useGate });
                     b.set (speed, 0.4f);
+                    b.set (breaks, 0.3f);
                 } },
 
                 { "Snare Roll Trap", "rolling, fill", true, [] (Builder& b)
@@ -77,13 +78,15 @@ namespace mimic
                     b.only ({ useRoll, useStutter });
                     b.set (speed, 0.6f);
                     b.set (anticipation, 0.5f);
+                    b.set (breaks, 0.6f);
                 } },
 
-                { "Tape Ghost", "dragging, fill", true, [] (Builder& b)
+                { "Tape Ghost", "dragging, echo, fill", true, [] (Builder& b)
                 {
                     b.fill (3, lastHalfBar, 0.5f);
                     b.only ({ useTape, useReverse });
                     b.set (seed, 17.0f);
+                    b.set (throwAmount, 0.45f);
                 } },
 
                 { "Scatter Brain", "broken, fill", true, [] (Builder& b)
@@ -119,8 +122,9 @@ namespace mimic
                     b.set (seed, 70.0f);
                 } },
 
-                { "Swelling Jaws", "rising, fill", true, [] (Builder& b)
+                { "Swelling Jaws", "rising, echo, fill", true, [] (Builder& b)
                 {
+                    b.set (throwAmount, 0.7f);
                     b.fill (3, lastBar, 0.75f);
                     b.only ({ useRoll, useReverse, useGate });
                     b.set (anticipation, 1.0f);
@@ -133,6 +137,7 @@ namespace mimic
                 {
                     b.wild (0.15f, 0.4f);
                     b.only ({ useStutter, useGate, useScatter, useReverse });
+                    b.set (swing, 0.3f);
                 } },
 
                 { "Venetian Teeth", "broken, choppy", false, [] (Builder& b)
@@ -193,6 +198,33 @@ namespace mimic
                     b.set (pitcher, 1.0f);
                     b.set (slicer, 0.8f);
                     b.set (shaper, 0.6f);
+                } },
+
+                // v0.2
+                { "Dub Throw", "echo, subtle, fill", true, [] (Builder& b)
+                {
+                    b.fill (2, lastBeat, 0.4f);
+                    b.only ({ useStutter, useReverse });
+                    b.set (throwAmount, 0.9f);
+                    b.set (breaks, 0.4f);
+                    b.set (seed, 808.0f);
+                } },
+
+                { "Arp Parasite", "pitched, melodic, fill", true, [] (Builder& b)
+                {
+                    b.fill (1, lastHalfBar, 0.7f);
+                    b.only ({ useStutter, useTape });
+                    b.set (material, materialMelodic);
+                    b.set (seed, 12.0f);
+                } },
+
+                { "Swung Ambush", "swung, broken", false, [] (Builder& b)
+                {
+                    b.wild (0.5f, 0.45f);
+                    b.only ({ useStutter, useScatter, useGate, useRoll });
+                    b.set (swing, 0.6f);
+                    b.set (breaks, 0.45f);
+                    b.set (seed, 1312.0f);
                 } }
             };
 
