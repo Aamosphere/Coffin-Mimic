@@ -86,8 +86,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
     layout.add (std::make_unique<AudioParameterInt> (ParameterID { ids::triggerNote, 1 }, "Trigger Note", 0, 127, 36,
         AudioParameterIntAttributes().withStringFromValueFunction ([] (int v, int) { return MidiMessage::getMidiNoteName (v, true, true, 3); })));
 
-    // Out of the box the Mimic mashes, stutters and rolls.
-    for (int i = 0; i < numContent; ++i)
+    // Out of the box the Mimic mashes, stutters and rolls. (Echo, added
+    // later, is registered at the end of the list.)
+    for (int i = 0; i < numContent - 1; ++i)
     {
         const auto kind = contentKinds[i];
         toggle (ids::contentIds[i], ids::contentNames[i].toRawUTF8(),
@@ -134,6 +135,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
     add (ids::possess, "Possess", { 0.0f, 1.0f }, 0.0f, percent);
     toggle (ids::possessInvert, "Possess Invert", false);
 
+    toggle (ids::useEcho, "Echo", false);
+    add (ids::dynamics, "Dynamics", { 0.0f, 1.0f }, 0.0f, percent);
+
     return layout;
 }
 
@@ -171,6 +175,13 @@ void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     player.prepare (sr, &history, &mainOnsets);
     shifter.prepare (sr);
     vocoder.prepare (sr);
+    echoDelay.prepare (sr);
+    echoSend = 0.0f;
+    echoAlive = 0;
+    echoRamp = 1.0f / (float) (0.005 * sr);
+    restDuck = 1.0f;
+    restDuckCoeff = coeff (0.003, sr);
+    chopAt = possessAt = -1.0;
     voiceMix = 0.0f;
     voiceStep = coeff (0.01, sr);
     possessEnd = -1;
@@ -239,6 +250,7 @@ void MimicProcessor::discontinuity()
     player.setValidFrom (now);
     segmentIndex = -1;
     possessEnd = -1;
+    chopAt = possessAt = -1.0;
     spanKey = std::numeric_limits<int64_t>::min();
     fillsInRow = 0;
     wasInFill = false;
@@ -372,6 +384,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const float filterGlide = value (ids::filterGlide);
     const bool evolve = choice (ids::loop) == ids::loopEvolve;
     const int phraseStart = choice (ids::phraseStart);
+    player.setDynamics (value (ids::dynamics));
 
     if (throwAmount > 0.0f && std::abs (throwAmount - lastThrowDecay) > 0.01f)
     {
@@ -501,18 +514,32 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     int64_t barIndex = (int64_t) std::llround (barStart / barLen);
 
-    // A cycle loop jumping back plays on as if the song went on, so a looped
-    // bar keeps changing (New every pass). Linear playback counts the song's
-    // own bars either way.
+    // A cycle loop jumping back counts its passes, so a looped bar can get a
+    // new pattern every pass (New every pass). Where fills and variations
+    // fall is always the song's own bar: a fill set for bar 2 stays in bar 2
+    // however the loop is set.
     if (jumped && lastRawBar != std::numeric_limits<int64_t>::min() && barIndex <= lastRawBar)
         loopOffset += lastRawBar + 1 - barIndex;
 
     // Phrases start at the Phrase Start bar: a song that begins on bar 3
     // gets its fills at the end of bars 6, 10, 14...
-    const int64_t barShift = (evolve ? loopOffset : 0) - phraseStart;
+    const int64_t barShift = -phraseStart;
+    // Salt for the seeds of each loop pass (0 without loops, or with Same
+    // every pass).
+    const int64_t passSalt = evolve ? loopOffset * 1000003 : 0;
     int barsToFill = -1;
     float progressShown = 0.0f;
     bool fillShown = false;
+
+    // The granular delay: dotted eighths, longer repeats as Bite rises;
+    // melodies and pads shimmer an octave up, voices and pads go backwards
+    // now and then.
+    {
+        const int m = materialChoice == ids::materialAuto ? classifier.material() : materialChoice - 1;
+        const float shimmer = m == melodic ? 0.3f : (m == harmonic ? 0.45f : (m == vocal ? 0.25f : 0.0f));
+        const float backwards = m == vocal ? 0.3f : (m == harmonic ? 0.2f : 0.05f);
+        echoDelay.setup (0.75 * spq, 0.4f + 0.3f * bite, shimmer, backwards);
+    }
 
     GenSettings g;
     g.beat = beatLen;
@@ -660,8 +687,8 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             const int groupBars = ids::variationBars[juce::jlimit (0, 3, variationChoice)];
             const int64_t group = floorDiv (phraseBar, groupBars);
             variationBar = groupBars > 1 && phraseBar - group * groupBars == groupBars - 1;
-            key = spanKeyFor (phraseBar, tagWild);
-            seedKey = spanKeyFor (group * 2 + (variationBar ? 1 : 0), tagWild);
+            key = spanKeyFor (phraseBar + passSalt, tagWild);
+            seedKey = spanKeyFor (group * 2 + (variationBar ? 1 : 0) + passSalt, tagWild);
             sStart = barStart;
             sLength = barLen;
             haveSpan = true;
@@ -674,7 +701,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             const double fillStart = groupEnd - fillLen;
             // No fills before the phrases start.
             const bool allowed = phraseBar >= 0 && (keep || probability >= 0.999f
-                              || unit (hash64 ((uint64_t) group, (uint64_t) seedValue ^ 0xf111ull)) < probability);
+                              || unit (hash64 ((uint64_t) (group + passSalt), (uint64_t) seedValue ^ 0xf111ull)) < probability);
 
             if (allowed)
             {
@@ -682,7 +709,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
                 if (tl >= fillStart)
                 {
-                    key = seedKey = spanKeyFor (group, tagFill);
+                    key = seedKey = spanKeyFor (group + passSalt, tagFill);
                     sStart = fillStart;
                     sLength = fillLen;
                     offsetInBar = std::fmod (barLen - std::fmod (fillLen, barLen), barLen);
@@ -771,26 +798,67 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         // between fills.
         const float teeth = wild || inFill ? 1.0f : juce::jmax (lure, antProgress);
 
-        // Slicer: the prey's strikes (or its gaps) restart the slices.
+        // The prey's hits keep time: a hit on a grid line (or just after it,
+        // as detection lags a little) acts at once; one between the lines
+        // waits for the next one.
+        const double gridSteps = (tl - barStart) / step;
+        const double intoStep = gridSteps - std::floor (gridSteps);
+        const bool onGrid = intoStep < 0.2;
+        const double nextGrid = barStart + (std::floor (gridSteps) + 1.0) * step;
+
+        // Chop: the prey's strikes (or its gaps) restart the slices.
+        bool chop = false;
+
         if (slicerAmount > 0.0f && preySource != ids::preySelf && (slicerInvert ? preyGap : preyStrike)
             && slicerRng.chance (slicerAmount * teeth))
+        {
+            if (onGrid)
+                chop = true;
+            else if (chopAt < 0.0)
+                chopAt = nextGrid;
+        }
+
+        if (chopAt >= 0.0 && tl >= chopAt - 1.0e-9)
+        {
+            chop = true;
+            chopAt = -1.0;
+        }
+
+        if (chop)
         {
             player.strike (now, spq, step, slicerRng.next());
             strikeFlash = 1.0f;
         }
 
         // Possess: a prey hit (or, flipped, a silence) fires one of the
-        // Mimic's events right there, a step or two long. The next hit may
-        // cut it short, but not before a step has played.
+        // Mimic's events, two or four steps long, ending on the grid. The
+        // next hit may cut it short, but not before a step has played.
+        bool possessNow = false;
+
         if (possessAmount > 0.0f && (possessInvert ? preyGap : preyStrike) && now >= possessNext
             && possessRng.chance (juce::jmin (1.0f, 1.3f * possessAmount) * teeth))
+        {
+            if (onGrid)
+                possessNow = true;
+            else if (possessAt < 0.0)
+                possessAt = nextGrid;
+        }
+
+        if (possessAt >= 0.0 && tl >= possessAt - 1.0e-9)
+        {
+            possessNow = true;
+            possessAt = -1.0;
+        }
+
+        if (possessNow)
         {
             GenSettings e = g;
             e.intensity = juce::jmax (0.35f, intensity);
             e.offsetInBar = tl - barStart;
             e.fill = false;
             const double steps = possessRng.chance (0.3f + 0.5f * possessAmount) ? 4.0 : 2.0;
-            const double length = juce::jmin (barLen, steps * step);
+            const double late = (gridSteps - std::floor (gridSteps + 1.0e-6)) * step;
+            const double length = juce::jmin (barLen, steps * step - juce::jmax (0.0, late));
             auto event = makeEvent (e, length, possessRng.next());
 
             if (event.kind != Kind::pass)
@@ -801,6 +869,8 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
                 possessNext = now + (int64_t) (step * spq * 0.9);
                 segmentIndex = -2;
                 possessFlash = 1.0f;
+                lastPossessPpq.store (tl, std::memory_order_relaxed);
+                possessCount.fetch_add (1, std::memory_order_relaxed);
             }
         }
 
@@ -816,6 +886,29 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         const float keepDry = 1.0f - juce::jmin (1.0f, weights.rest);
         float sl = replaceMix * wl + (1.0f - replaceMix) * (inL * keepDry + 0.55f * fxL);
         float sr2 = replaceMix * wr + (1.0f - replaceMix) * (inR * keepDry + 0.55f * fxR);
+
+        // The echoes (granular delay and reverb throw) duck in a Break, so
+        // the hole is heard.
+        restDuck += restDuckCoeff * ((1.0f - 0.95f * juce::jmin (1.0f, weights.rest) * engage) - restDuck);
+
+        // Echo: while an echo segment plays, the track is sent into the
+        // granular delay; its repeats ring on after it.
+        float echoL = 0.0f, echoR = 0.0f;
+        echoSend = player.kind() == Kind::echo ? juce::jmin (1.0f, echoSend + echoRamp) : juce::jmax (0.0f, echoSend - echoRamp);
+
+        if (echoSend > 0.0f)
+            echoAlive = (int) (sr * 10.0);
+
+        if (echoAlive > 0)
+        {
+            --echoAlive;
+            echoDelay.process (inL * echoSend, inR * echoSend, echoL, echoR);
+            echoL *= 0.7f * restDuck;
+            echoR *= 0.7f * restDuck;
+
+            if (echoAlive == 0)
+                echoDelay.reset();
+        }
 
         // Voice: the track speaks with the prey's voice, or (Carve) makes
         // room for it. Needs an audio prey on the side input.
@@ -876,7 +969,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         // high-pass).
         if (throatType != ids::filterOff)
         {
-            const auto stepIndex = phraseBar * 4096 + (int64_t) std::floor ((tl - barStart) / step + 1.0e-6);
+            const auto stepIndex = (phraseBar + passSalt) * 4096 + (int64_t) std::floor ((tl - barStart) / step + 1.0e-6);
 
             if (stepIndex != throatStep)
             {
@@ -972,7 +1065,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         const float dl = inL, dr = inR;
 
         const float k = engage * mixSmoothed;
-        const float yl = dl * (1.0f - k) + sl * k, yr = dr * (1.0f - k) + sr2 * k;
+        const float yl = dl * (1.0f - k) + sl * k + echoL, yr = dr * (1.0f - k) + sr2 * k + echoR;
         left[i] = yl * outGain;
 
         if (right != nullptr)
@@ -1010,6 +1103,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
             sendL[(size_t) sendCount] = yl * sendEnv;
             sendR[(size_t) sendCount] = yr * sendEnv;
+            duckBuf[(size_t) sendCount] = restDuck;
 
             if (++sendCount == throwChunk)
                 flushThrow (left, right, sendStart, sendCount, throwReturn * outGain);
@@ -1075,10 +1169,10 @@ void MimicProcessor::flushThrow (float* left, float* right, int start, int count
 
     for (int n = 0; n < count; ++n)
     {
-        left[start + n] += verbL[(size_t) n] * returnGain;
+        left[start + n] += verbL[(size_t) n] * returnGain * duckBuf[(size_t) n];
 
         if (right != nullptr)
-            right[start + n] += verbR[(size_t) n] * returnGain;
+            right[start + n] += verbR[(size_t) n] * returnGain * duckBuf[(size_t) n];
     }
 
     sendCount = 0;

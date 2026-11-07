@@ -10,12 +10,12 @@ namespace mimic
         }
 
         // How likely each content kind is for each material, in the order of
-        // contentKinds: stutter, roll, reverse, scatter, tape, gate, grains, slice.
+        // contentKinds: stutter, roll, reverse, scatter, tape, gate, grains, slice, echo.
         constexpr float contentWeights[numMaterials][numContent] {
-            { 3.0f, 3.0f, 1.0f, 2.0f, 0.8f, 2.0f, 0.8f, 3.0f },   // percussive
-            { 2.5f, 1.0f, 2.0f, 1.5f, 2.0f, 1.0f, 1.5f, 2.0f },   // melodic
-            { 1.0f, 0.4f, 3.0f, 1.0f, 2.0f, 2.5f, 3.0f, 1.0f },   // harmonic
-            { 3.5f, 0.5f, 2.5f, 1.5f, 2.0f, 1.5f, 2.5f, 1.5f }    // voice: chops, swells, choirs
+            { 3.0f, 3.0f, 1.0f, 2.0f, 0.8f, 2.0f, 0.8f, 3.0f, 0.8f },   // percussive
+            { 2.5f, 1.5f, 2.0f, 1.5f, 2.0f, 1.0f, 1.5f, 2.0f, 1.8f },   // melodic
+            { 1.5f, 0.4f, 3.0f, 1.0f, 2.0f, 2.5f, 3.0f, 1.0f, 2.0f },   // harmonic
+            { 3.5f, 1.0f, 2.5f, 1.5f, 2.0f, 1.5f, 2.5f, 1.5f, 2.2f }    // voice: chops, swells, choirs
         };
 
         bool isEnabled (const GenSettings& g, Kind kind)
@@ -113,6 +113,19 @@ namespace mimic
 
         Segment makeSegment (Kind kind, double start, double length, float intensity, const GenSettings& g, Rng& r)
         {
+            const int material = g.material;
+
+            // Each material has its own versions of some switches. (Drums
+            // keep theirs, and their scripts stay exactly as they were.)
+            if (kind == Kind::stutter && material == melodic && r.chance (0.55f))
+                kind = Kind::shards;
+            else if (kind == Kind::stutter && material == harmonic && r.chance (0.5f))
+                kind = Kind::fog;
+            else if (kind == Kind::grains && material == harmonic && r.chance (0.6f))
+                kind = Kind::fog;
+            else if (kind == Kind::roll && (material == melodic || material == vocal) && r.chance (0.6f))
+                kind = Kind::bend;
+
             Segment s;
             s.start = start;
             s.length = length;
@@ -274,6 +287,41 @@ namespace mimic
                     break;
                 }
 
+                case Kind::shards:
+                {
+                    // The loop with itself an octave up (twice as fast) and
+                    // an octave down or a fifth up, the layers coming in
+                    // one loop after another.
+                    s.repeat = juce::jmin (length, r.chance (0.5f) ? 0.5 : 0.25);
+                    s.arp = { 0, 12, (int8_t) (r.chance (0.5f) ? -12 : 7), 0 };
+                    s.arpLength = 0;   // the layers, not an arpeggio
+                    break;
+                }
+
+                case Kind::bend:
+                {
+                    // A loop that glides to a new pitch over the segment.
+                    constexpr int8_t targets[] { 12, 7, -12, -5, 5 };
+                    s.repeat = juce::jmin (length, r.chance (0.5f) ? 0.25 : 0.5);
+                    s.rateEnd = std::exp2 ((float) targets[r.below ((int) std::size (targets))] / 12.0f);
+                    s.decay = r.range (0.9f, 1.0f);
+                    break;
+                }
+
+                case Kind::fog:
+                    // A haze: short, heavily overlapped, slightly detuned
+                    // grains from the last beat, some an octave away, some
+                    // backwards.
+                    s.grainNote = 0.125;
+                    s.grainOverlap = 3.0f;
+                    s.taper = 1.0f;
+                    s.repeat = 1.0;
+                    s.octaveChance = 0.25f + 0.25f * I;
+                    s.reverseChance = 0.35f;
+                    s.density = s.grainOverlap;
+                    break;
+
+                case Kind::echo:
                 case Kind::pass:
                 case Kind::rest:
                     break;
@@ -281,7 +329,7 @@ namespace mimic
 
             // Filter sweeps: a closing low-pass, or a high-pass opening up
             // like a riser.
-            if (kind != Kind::slice && r.chance ((m == harmonic ? 0.2f : 0.1f) + 0.2f * I))
+            if (kind != Kind::slice && kind != Kind::echo && r.chance ((m == harmonic ? 0.2f : 0.1f) + 0.2f * I))
             {
                 if (r.chance (0.5f))
                     s.cutEnd = r.range (0.3f, 0.6f);
@@ -855,7 +903,7 @@ namespace mimic
         frameSamples = 0;
         clarity = sustain = onsetRate = 0.0f;
         pitchDrift = pitchWobble = 0.0f;
-        current = candidate = harmonic;
+        current = candidate = percussive;
         candidateSeconds = 0.0f;
         primed = false;
     }
@@ -1089,7 +1137,7 @@ namespace mimic
         return (float) (sr * (onsetAligned ? 0.0004 : 0.002));
     }
 
-    void Player::pushTail()
+    void Player::pushTail (double fadeSeconds)
     {
         if (! current.alive)
             return;
@@ -1104,18 +1152,31 @@ namespace mimic
         }
 
         *slot = current;
-        slot->fadeStep = 1.0f / (float) (sr * 0.0015);
+        slot->fadeStep = 1.0f / (float) (sr * fadeSeconds);
         slot->endK = -1;
     }
 
     void Player::beginPass (int64_t now)
     {
+        // Out of a Break the track comes back a little softer, so a sound
+        // that was ringing on does not snap in.
+        const bool fromRest = current.alive && current.kind == Kind::rest;
         pushTail();
         current = Voice {};
         current.alive = true;
         current.startNow = now;
         current.fade = 0.0f;
-        current.fadeStep = 1.0f / fadeSamples (false);
+        current.fadeStep = fromRest ? 1.0f / (float) (sr * 0.004) : 1.0f / fadeSamples (false);
+    }
+
+    float Player::accentFor (uint32_t seed, int index, bool onBeat) const
+    {
+        if (dynamics <= 0.0f)
+            return 1.0f;
+
+        Rng r (hash64 (seed, (uint64_t) index + 0xd1ull));
+        const float depth = onBeat ? 0.25f : 0.75f;
+        return 1.0f - dynamics * depth * r.range (0.3f, 1.0f);
     }
 
     void Player::begin (const Segment& seg, int64_t now, double spq, int64_t lengthSamples)
@@ -1127,10 +1188,15 @@ namespace mimic
             return;
         }
 
-        pushTail();
+        // A Break fades the sound out over 7 ms instead of cutting it, so a
+        // ringing kick does not click; out of one, a little softer too.
+        const bool isRest = seg.kind == Kind::rest;
+        const bool fromRest = current.alive && current.kind == Kind::rest;
+        pushTail (isRest ? 0.007 : 0.0015);
         Voice v;
         v.alive = true;
         v.kind = seg.kind;
+        v.accent = accentFor (seg.seed, -1, false);
         v.seg = seg;
         v.startNow = now;
         v.lengthS = juce::jmax ((int64_t) 1, lengthSamples);
@@ -1147,6 +1213,7 @@ namespace mimic
         {
             case Kind::stutter:
             case Kind::roll:
+            case Kind::bend:
             {
                 // Repeat a hit that sits on the grid: the one landing now,
                 // or one of the last few grid hits (the snare two beats ago).
@@ -1204,6 +1271,11 @@ namespace mimic
                 break;
             }
 
+            case Kind::shards:
+                // The loop: the last repeat-length of the track, from a hit.
+                v.capture = onsets->snap ((double) now - v.baseRepeatS, v.baseRepeatS * 0.5, preroll, &aligned);
+                break;
+
             case Kind::scatter:
                 pickScatterSlot (v, now);
                 aligned = v.reversed ? false : true;
@@ -1214,6 +1286,7 @@ namespace mimic
                 break;
 
             case Kind::grains:
+            case Kind::fog:
             {
                 const double grainLength = seg.grainNote * spq * seg.grainOverlap;
                 v.capture = (double) now - v.repeatS - grainLength * 2.2 - 0.01 * sr;
@@ -1223,6 +1296,7 @@ namespace mimic
             case Kind::gate:
             case Kind::pass:
             case Kind::rest:
+            case Kind::echo:
                 break;
         }
 
@@ -1230,11 +1304,12 @@ namespace mimic
         // song: play the track instead. (Grains and tape start from
         // the recent past as well.)
         const bool needsPast = seg.kind == Kind::slice || seg.kind == Kind::scatter || seg.kind == Kind::reverse
-                            || seg.kind == Kind::grains || ((seg.kind == Kind::stutter || seg.kind == Kind::roll) && v.capture < (double) now);
+                            || seg.kind == Kind::grains || seg.kind == Kind::fog || seg.kind == Kind::shards
+                            || ((seg.kind == Kind::stutter || seg.kind == Kind::roll || seg.kind == Kind::bend) && v.capture < (double) now);
 
         if (needsPast && v.capture < (double) validFrom)
         {
-            if (seg.kind == Kind::stutter || seg.kind == Kind::roll)
+            if (seg.kind == Kind::stutter || seg.kind == Kind::roll || seg.kind == Kind::bend)
             {
                 v.capture = (double) now;   // repeat what is playing now instead
             }
@@ -1250,7 +1325,9 @@ namespace mimic
 
         v.filterOn = seg.highPass || seg.cutStart < 0.999f || seg.cutEnd < 0.999f;
         v.fade = 0.0f;
-        v.fadeStep = 1.0f / fadeSamples (aligned);
+        v.fadeStep = isRest ? 1.0f / (float) (sr * 0.007)
+                   : (fromRest && ! aligned) ? 1.0f / (float) (sr * 0.004)
+                                             : 1.0f / fadeSamples (aligned);
         current = v;
     }
 
@@ -1315,6 +1392,15 @@ namespace mimic
         if (v.kind == Kind::scatter)
             pickScatterSlot (v, now);
 
+        // Dynamics: repeats on the beat (and on the eighths) stay strong,
+        // the ones between them get quieter.
+        {
+            const double beatS = v.spq;
+            const double into = (double) (v.startNow + v.repStart);
+            const double phase = std::fmod (into, beatS * 0.5) / (beatS * 0.5);
+            v.repAccent = accentFor (v.seg.seed, v.repeatIndex, phase < 0.08 || phase > 0.92);
+        }
+
         v.fade = 0.0f;
         v.fadeStep = 1.0f / fadeSamples (v.kind != Kind::scatter || ! v.reversed);
     }
@@ -1325,6 +1411,7 @@ namespace mimic
         {
             case Kind::stutter:
             case Kind::roll:
+            case Kind::bend:
             case Kind::scatter:
             case Kind::reverse:
                 pushTail();
@@ -1362,6 +1449,9 @@ namespace mimic
             case Kind::grains:
             case Kind::rest:
             case Kind::slice:
+            case Kind::shards:
+            case Kind::fog:
+            case Kind::echo:
                 break;
         }
     }
@@ -1403,14 +1493,21 @@ namespace mimic
             rate *= intervals[r.below (v.seg.taper < 0.3f ? 2 : 3)];
         }
 
-        const bool reversed = r.chance (v.seg.reverseChance);
+        if (v.kind == Kind::fog)
+            rate *= std::exp2 (r.range (-0.12f, 0.12f) / 12.0f);   // a few cents either way
 
-        // Drums take grains from grid positions; textures drift around them.
+        const bool reversed = r.chance (v.seg.reverseChance);
+        g->accent = 1.0f - dynamics * 0.7f * r.uni();
+
+        // Drums take grains from grid positions; textures drift around them
+        // (fog drifts the whole beat).
         const int slots = juce::jmax (1, (int) (v.repeatS / note));
         double start = v.capture + (double) r.below (slots) * note;
 
         if (v.seg.taper > 0.3f)
-            start += r.range (-0.25f, 0.25f) * note;
+            start += r.range (-0.25f, 0.25f) * note * (v.kind == Kind::fog ? 3.0f : 1.0f);
+
+        start = juce::jmin (start, v.capture + v.repeatS);
 
         const float pan = juce::MathConstants<float>::pi * (0.25f + r.range (-0.2f, 0.2f) * v.seg.taper);
 
@@ -1433,6 +1530,7 @@ namespace mimic
         switch (v.kind)
         {
             case Kind::pass:
+            case Kind::echo:
                 l = inL;
                 r = inR;
                 return;
@@ -1441,8 +1539,39 @@ namespace mimic
                 l = r = 0.0f;
                 return;
 
+            case Kind::shards:
+            {
+                // Three layers loop the same piece at their own speeds: the
+                // first at once, the next a loop later, the last after two.
+                const double loopS = juce::jmax (64.0, v.baseRepeatS);
+                const float fadeS = (float) (0.004 * sr);
+                constexpr float gains[] { 0.8f, 0.5f, 0.42f };
+                constexpr float panL[] { 1.0f, 1.0f, 0.55f }, panR[] { 1.0f, 0.55f, 1.0f };
+                l = r = 0.0f;
+
+                for (int j = 0; j < 3; ++j)
+                {
+                    const double t = (double) k - (double) j * loopS;
+
+                    if (t < 0.0)
+                        continue;
+
+                    const double rate = std::exp2 ((double) s.arp[(size_t) j] / 12.0);
+                    const double cycle = loopS / rate;
+                    const double inCycle = std::fmod (t, cycle);
+                    const double pos = v.capture + inCycle * rate;
+                    const float w = juce::jmin (1.0f, (float) inCycle / fadeS) * juce::jmin (1.0f, (float) (cycle - inCycle) / fadeS);
+                    l += history->read (0, pos, now) * w * gains[j] * panL[j];
+                    r += history->read (1, pos, now) * w * gains[j] * panR[j];
+                }
+
+                gain *= v.repAccent;
+                break;
+            }
+
             case Kind::stutter:
             case Kind::roll:
+            case Kind::bend:
             case Kind::reverse:
             case Kind::scatter:
             case Kind::slice:
@@ -1452,7 +1581,7 @@ namespace mimic
                 v.phase += rate;
                 l = history->read (0, pos, now);
                 r = history->read (1, pos, now);
-                gain *= v.repGain;
+                gain *= v.repGain * v.repAccent;
 
                 // Short repeats are articulated: each one stops just before
                 // the next, so they sound like hits, not a buzz.
@@ -1493,6 +1622,7 @@ namespace mimic
             }
 
             case Kind::grains:
+            case Kind::fog:
             {
                 if (--v.spawnCountdown <= 0)
                     spawnGrain (v, now, p);
@@ -1514,8 +1644,8 @@ namespace mimic
                         w = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * x / edge);
                     else if (x > 1.0f - edge)
                         w = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::pi * (1.0f - x) / edge);
-                    l += history->read (0, g.pos, now) * w * g.gainL;
-                    r += history->read (1, g.pos, now) * w * g.gainR;
+                    l += history->read (0, g.pos, now) * w * g.gainL * g.accent;
+                    r += history->read (1, g.pos, now) * w * g.gainR * g.accent;
                     g.pos += g.rate;
 
                     if (++g.age >= g.length)
@@ -1543,6 +1673,7 @@ namespace mimic
             r = v.filter.process (1, r, type);
         }
 
+        gain *= v.accent;
         l *= gain;
         r *= gain;
     }
@@ -1555,7 +1686,7 @@ namespace mimic
         if (current.endK >= 0 && now - current.startNow >= current.endK)
             beginPass (now);
 
-        const bool repeats = current.kind == Kind::stutter || current.kind == Kind::roll
+        const bool repeats = current.kind == Kind::stutter || current.kind == Kind::roll || current.kind == Kind::bend
                           || current.kind == Kind::reverse || current.kind == Kind::scatter;
 
         if (repeats && (double) (now - current.startNow - current.repStart) >= current.repeatS)
@@ -1566,7 +1697,7 @@ namespace mimic
         outL += l * current.fade;
         outR += r * current.fade;
 
-        if (current.kind == Kind::pass)
+        if (current.kind == Kind::pass || current.kind == Kind::echo)
             w.pass += current.fade;
         else if (current.kind == Kind::rest)
             w.rest += current.fade;
@@ -1582,7 +1713,7 @@ namespace mimic
             outL += l * t.fade;
             outR += r * t.fade;
 
-            if (t.kind == Kind::pass)
+            if (t.kind == Kind::pass || t.kind == Kind::echo)
                 w.pass += t.fade;
             else if (t.kind == Kind::rest)
                 w.rest += t.fade;
@@ -1595,6 +1726,120 @@ namespace mimic
     }
 
     //==========================================================================
+    //==========================================================================
+    void GrainDelay::prepare (double sampleRate)
+    {
+        sr = sampleRate;
+        int size = 1;
+
+        while (size < (int) (sr * 4.0))
+            size <<= 1;
+
+        buffer[0].assign ((size_t) size, 0.0f);
+        buffer[1].assign ((size_t) size, 0.0f);
+        mask = size - 1;
+        grainLength = (int) (0.07 * sr);
+        tone.set (5500.0f, 0.6f, sr);
+        reset();
+    }
+
+    void GrainDelay::reset()
+    {
+        std::fill (buffer[0].begin(), buffer[0].end(), 0.0f);
+        std::fill (buffer[1].begin(), buffer[1].end(), 0.0f);
+        write = 0;
+        countdown = 0;
+        grainCount = 0;
+        left = true;
+        fbL = fbR = 0.0f;
+        tone.reset();
+
+        for (auto& g : grains)
+            g.on = false;
+    }
+
+    void GrainDelay::setup (double delaySamples, float fb, float shimmerAmount, float reverseAmount)
+    {
+        delay = juce::jlimit ((double) grainLength * 1.5, (double) mask * 0.45, delaySamples);
+        feedback = fb;
+        shimmer = shimmerAmount;
+        reverse = reverseAmount;
+    }
+
+    void GrainDelay::spawn()
+    {
+        Grain* g = nullptr;
+
+        for (auto& candidate : grains)
+            if (! candidate.on) { g = &candidate; break; }
+
+        if (g == nullptr)
+            return;
+
+        Rng r (hash64 (0xec40ull, grainCount++));
+        const double rate = r.chance (shimmer) ? 2.0 : 1.0;
+        const bool backwards = r.chance (reverse);
+        // A little smear in time: up to 12 ms either way of the echo.
+        const double jitter = r.range (-0.012f, 0.012f) * sr;
+        const double start = (double) write - delay + jitter - (double) grainLength * (rate - 1.0);
+
+        g->on = true;
+        g->age = 0;
+        g->length = grainLength;
+        g->rate = backwards ? -rate : rate;
+        g->pos = backwards ? start + (double) grainLength * rate : start;
+
+        // Echoes lean left and right in turn.
+        left = ! left;
+        const float pan = juce::MathConstants<float>::halfPi * (left ? 0.3f : 0.7f) + r.range (-0.1f, 0.1f);
+        g->gainL = std::cos (pan) * 1.2f;
+        g->gainR = std::sin (pan) * 1.2f;
+    }
+
+    void GrainDelay::process (float inL, float inR, float& outL, float& outR)
+    {
+        if (--countdown <= 0)
+        {
+            countdown = grainLength / 2;   // two grains overlap
+            spawn();
+        }
+
+        outL = outR = 0.0f;
+
+        for (auto& g : grains)
+        {
+            if (! g.on)
+                continue;
+
+            const float x = (float) g.age / (float) g.length;
+            const float w = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * x);
+            const auto i = (int64_t) std::floor (g.pos);
+            const float f = (float) (g.pos - (double) i);
+
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const auto& b = buffer[ch];
+                const float a = b[(size_t) (i & mask)], c = b[(size_t) ((i + 1) & mask)];
+                const float y = (a + f * (c - a)) * w;
+
+                if (ch == 0) outL += y * g.gainL;
+                else         outR += y * g.gainR;
+            }
+
+            g.pos += g.rate;
+
+            if (++g.age >= g.length)
+                g.on = false;
+        }
+
+        // The repeats go round again, a little darker each time.
+        fbL = tone.process (0, outL, 0);
+        fbR = tone.process (1, outR, 0);
+        buffer[0][(size_t) (write & mask)] = inL + feedback * fbL;
+        buffer[1][(size_t) (write & mask)] = inR + feedback * fbR;
+        ++write;
+    }
+
     //==========================================================================
     void Vocoder::prepare (double sampleRate)
     {

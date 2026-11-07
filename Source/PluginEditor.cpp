@@ -20,8 +20,10 @@ namespace
     const juce::Colour mouth     { 0xff2a0507 };
 
     // One name per mimic::Kind, in its order.
-    const char* const kindNames[] { "-", "STUTTER", "ROLL", "REVERSE", "SCATTER", "TAPE", "GATE", "GRAINS", "BREAK", "MASH" };
-    const char* const shortKindNames[] { "", "STU", "ROLL", "REV", "SCAT", "TAPE", "GATE", "GRN", "", "MASH" };
+    const char* const kindNames[] { "-", "STUTTER", "ROLL", "REVERSE", "SCATTER", "TAPE", "GATE", "GRAINS", "BREAK", "MASH",
+                                    "SHARDS", "BEND", "FOG", "ECHO" };
+    const char* const shortKindNames[] { "", "STU", "ROLL", "REV", "SCAT", "TAPE", "GATE", "GRN", "", "MASH",
+                                         "SHRD", "BEND", "FOG", "ECHO" };
     const juce::Colour kindColours[] {
         juce::Colour (0xff3a2a1c),   // pass
         juce::Colour (0xffe8b84a),   // stutter
@@ -32,7 +34,11 @@ namespace
         juce::Colour (0xfff1e6bf),   // gate
         juce::Colour (0xff4ab0a0),   // grains
         juce::Colour (0xff000000),   // rest
-        juce::Colour (0xffb06a2a)    // mash
+        juce::Colour (0xffb06a2a),   // mash
+        juce::Colour (0xfff0d878),   // shards (a brighter stutter)
+        juce::Colour (0xffff6a50),   // bend (a brighter roll)
+        juce::Colour (0xff7ad0c4),   // fog (a paler grain)
+        juce::Colour (0xff5a8ae0)    // echo
     };
     const char* const materialNames[] { "PERCUSSIVE", "MELODIC", "HARMONIC", "VOICE" };
 
@@ -211,7 +217,7 @@ void MimicEditor::Look::drawToggleButton (juce::Graphics& g, juce::ToggleButton&
     g.setColour (on ? goldLight : (highlighted ? gold : edge.brighter (0.3f)));
     g.drawRoundedRectangle (r, 5.0f, 1.5f);
     g.setColour (on ? ink : dim);
-    g.setFont (font (bangers, 17.0f));
+    g.setFont (font (bangers, 16.0f));
     g.drawText (b.getButtonText().toUpperCase(), r, juce::Justification::centred);
 }
 
@@ -265,23 +271,29 @@ juce::Font MimicEditor::Look::getPopupMenuFont()                 { return font (
 MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicProcessor (p)
 {
     setLookAndFeel (&look);
+    addAndMakeVisible (stage);
+    stage.painter = [this] (juce::Graphics& g) { paintFront (g); };
 
     // Front page.
     bite.slider.setName ("bite");
-    setUpKnob (*this, bite, ids::bite, {}, false);
+    setUpKnob (stage, bite, ids::bite, {}, false);
     bite.slider.setTooltip ("How hard the Mimic bites: from a little variation to breakbeat carnage.");
-    setUpKnob (*this, speed, ids::speed, "SPEED", false);
+    setUpKnob (stage, speed, ids::speed, "SPEED", false);
     speed.slider.setTooltip ("The grid it chews on: 1/4, 1/8, 1/16 or 1/32. The pattern below shows the grid.");
-    setUpKnob (*this, mix, ids::mix, "MIX", false);
+    setUpKnob (stage, mix, ids::mix, "MIX", false);
 
     for (int i = 0; i < numContent; ++i)
-        setUpSwitch (*this, contents[i], ids::contentIds[i], ids::contentNames[i], true);
+        setUpSwitch (stage, contents[i], ids::contentIds[i], ids::contentNames[i], true);
 
     contents[7].button.setTooltip ("Mash: moves pieces of the beat around, so the snare does not always land in the same place.");
+    contents[0].button.setTooltip ("Stutter: a hit repeats. On a melody it may become SHARDS (the loop layered an octave up and down), on pads FOG.");
+    contents[1].button.setTooltip ("Roll: a drummer's roll. On a melody or a voice it may become BEND, a loop gliding to a new pitch.");
+    contents[6].button.setTooltip ("Grains: the track as a grain cloud. On pads it may become FOG, a drifting detuned haze.");
+    contents[8].button.setTooltip ("Echo: a granular delay in dotted eighths. Melodies and pads shimmer an octave up, voices go backwards now and then.");
 
     for (auto* b : { &wildButton, &fillButton })
     {
-        addAndMakeVisible (*b);
+        stage.addAndMakeVisible (*b);
         b->setClickingTogglesState (false);
     }
 
@@ -289,12 +301,12 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     fillButton.setTooltip ("Fill: the track stays clean and the Mimic strikes at the end of each phrase.");
 
     // The mode panel.
-    setUpPick (*this, variation, ids::variation, "NEW PATTERN");
-    setUpPick (*this, loop, ids::loop, "LOOPED BAR");
-    setUpPick (*this, every, ids::fillEvery, "EVERY");
-    setUpPick (*this, length, ids::fillLength, "WHERE");
-    setUpPick (*this, phraseStart, ids::phraseStart, "COUNT FROM");
-    setUpKnob (*this, probability, ids::probability, {}, false);
+    setUpPick (stage, variation, ids::variation, "NEW PATTERN");
+    setUpPick (stage, loop, ids::loop, "LOOPED BAR");
+    setUpPick (stage, every, ids::fillEvery, "EVERY");
+    setUpPick (stage, length, ids::fillLength, "WHERE");
+    setUpPick (stage, phraseStart, ids::phraseStart, "COUNT FROM");
+    setUpKnob (stage, probability, ids::probability, {}, false);
     variation.box.setTooltip ("How long a pattern holds. The last bar of each group is a wilder variation.");
     loop.box.setTooltip ("When the DAW loops a bar: play the same pattern every pass, or a new one as if the song went on.");
     phraseStart.box.setTooltip ("The bar your song's phrases start from, so the fills land at the ends of its phrases.");
@@ -312,12 +324,12 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     wildButton.onClick = [this] { modeAttachment->setValueAsCompleteGesture ((float) ids::modeWild); };
     fillButton.onClick = [this] { modeAttachment->setValueAsCompleteGesture ((float) ids::modeFill); };
 
-    addAndMakeVisible (advancedButton);
+    stage.addAndMakeVisible (advancedButton);
     advancedButton.getProperties().set ("style", "dashed");
     advancedButton.onClick = [this] { showAdvanced (! drawer.isVisible()); };
 
     // Presets.
-    addAndMakeVisible (presetBox);
+    stage.addAndMakeVisible (presetBox);
     presetBox.onChange = [this]
     {
         const int id = presetBox.getSelectedId();
@@ -335,7 +347,7 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     };
 
     for (auto* b : { &previous, &next, &save })
-        addAndMakeVisible (*b);
+        stage.addAndMakeVisible (*b);
 
     save.getProperties().set ("style", "gold");
     save.setColour (juce::TextButton::textColourOffId, ink);
@@ -357,16 +369,23 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     };
 
     // The drawer.
-    addChildComponent (drawer);
+    stage.addChildComponent (drawer);
     drawer.painter = [this] (juce::Graphics& g) { paintDrawer (g); };
 
     setUpKnob (drawer, swing, ids::swing, "SWING", true);
-    setUpKnob (drawer, breaks, ids::breaks, "BREAKS", true);
-    setUpKnob (drawer, throwKnob, ids::throwAmount, "THROW", true);
     setUpKnob (drawer, output, ids::output, "OUTPUT", true);
     setUpKnob (drawer, monoBass, ids::monoBass, "MONO BASS", true);
+    // The groove column on the front page.
+    setUpKnob (stage, breaks, ids::breaks, "BREAKS", false);
+    setUpKnob (stage, throwKnob, ids::throwAmount, "THROW", false);
+    setUpKnob (stage, dynamicsKnob, ids::dynamics, "DYNAMICS", false);
     breaks.slider.setTooltip ("Holes in the beat: silent eighths, mostly on the offbeats. Works at any Bite.");
     throwKnob.slider.setTooltip ("Now and then a hit is thrown into the reverb and rings on.");
+    dynamicsKnob.slider.setTooltip ("Level differences: some events and repeats come out quieter, the ones on the beat stay strong - like a drummer's ghost notes and accents.");
+
+    // Values painted on the front page follow their knobs at once.
+    for (auto* k : { &speed, &mix, &breaks, &throwKnob, &dynamicsKnob })
+        k->slider.onValueChange = [this] { stage.repaint (0, 72, contentWidth, 496); };
     monoBass.slider.setTooltip ("Keeps the lows mono below this frequency.");
 
     setUpPick (drawer, throatType, ids::filterType, "TYPE");
@@ -415,7 +434,7 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     updateTeethNames();
     drawer.setVisible (mimicProcessor.advancedOpen);
     advancedButton.setButtonText (mimicProcessor.advancedOpen ? "HIDE" : "ADVANCED");
-    setSize (900, frontHeight + (mimicProcessor.advancedOpen ? drawerHeight : 0));
+    setSize (spineWidth + contentWidth, frontHeight + (mimicProcessor.advancedOpen ? drawerHeight : 0));
     startTimerHz (30);
 }
 
@@ -496,7 +515,7 @@ void MimicEditor::showAdvanced (bool show)
     mimicProcessor.advancedOpen = show;
     drawer.setVisible (show);
     advancedButton.setButtonText (show ? "HIDE" : "ADVANCED");
-    setSize (900, frontHeight + (show ? drawerHeight : 0));
+    setSize (spineWidth + contentWidth, frontHeight + (show ? drawerHeight : 0));
     repaint();
 }
 
@@ -599,9 +618,9 @@ void MimicEditor::timerCallback()
     lidOpen += 0.3f * (target - lidOpen);
     eyeGlow += 0.25f * ((chewing ? 1.0f : juce::jlimit (0.0f, 1.0f, (lidOpen - 0.2f) / 0.4f)) - eyeGlow);
 
-    repaint (0, 72, 560, 496);
-    repaint (modeArea);
-    repaint (0, 568, getWidth(), 52);
+    stage.repaint (0, 72, 560, 496);
+    stage.repaint (modeArea);
+    stage.repaint (0, 568, stage.getWidth(), 52);
 
     if (drawer.isVisible())
         drawer.repaint (preyMeter);
@@ -842,11 +861,32 @@ void MimicEditor::paintModePanel (juce::Graphics& g)
 
 void MimicEditor::paint (juce::Graphics& g)
 {
+    // The spine: the maker's name down the left edge, the same on every
+    // Aamosphere plugin.
+    const auto spine = juce::Rectangle<float> (0.0f, 0.0f, (float) spineWidth, (float) getHeight());
+    g.setColour (gold);
+    g.fillRect (spine);
+    g.setColour (ink);
+    g.fillRect (spine.withX ((float) spineWidth - 4.0f).withWidth (4.0f));
+
+    const juce::String maker ("AAMOSPHERE");
+    const float letterHeight = 40.0f, height = (float) frontHeight;
+    const float gap = (height - 16.0f - letterHeight * (float) maker.length()) / (float) (maker.length() + 1);
+    g.setFont (font (look.bangers, letterHeight));
+
+    for (int i = 0; i < maker.length(); ++i)
+        g.drawText (juce::String::charToString (maker[i]),
+                    juce::Rectangle<float> (0.0f, 8.0f + gap * (float) (i + 1) + letterHeight * (float) i, (float) spineWidth - 4.0f, letterHeight),
+                    juce::Justification::centred);
+}
+
+void MimicEditor::paintFront (juce::Graphics& g)
+{
     // Dungeon dark with a torch glow on the chest.
-    juce::ColourGradient glow (juce::Colour (0xff3a1f12), 270.0f, 280.0f, juce::Colour (0xff0b0605), 820.0f, 280.0f, true);
+    juce::ColourGradient glow (juce::Colour (0xff3a1f12), 270.0f, 280.0f, juce::Colour (0xff0b0605), 920.0f, 280.0f, true);
     glow.addColour (0.55, juce::Colour (0xff160c08));
     g.setGradientFill (glow);
-    g.fillRect (0, 0, getWidth(), frontHeight);
+    g.fillRect (0, 0, stage.getWidth(), frontHeight);
 
     // Header.
     g.setFont (font (look.eater, 70.0f));
@@ -881,6 +921,23 @@ void MimicEditor::paint (juce::Graphics& g)
         g.drawText (valueText (k == &speed ? ids::speed : ids::mix), box.getX(), k->slider.getBottom() + 18, box.getWidth(), 14, juce::Justification::centred);
     }
 
+    // The groove column: Breaks, Throw and Dynamics.
+    g.setColour (panel);
+    g.fillRoundedRectangle (grooveColumn.toFloat(), 8.0f);
+    g.setColour (edge);
+    g.drawRoundedRectangle (grooveColumn.toFloat(), 8.0f, 2.0f);
+
+    for (auto [k, name, id] : { std::tuple<Knob*, const char*, const char*> { &breaks, "BREAKS", ids::breaks },
+                                { &throwKnob, "THROW", ids::throwAmount }, { &dynamicsKnob, "DYNAMICS", ids::dynamics } })
+    {
+        g.setColour (goldLight);
+        g.setFont (font (look.bangers, 19.0f));
+        g.drawText (name, grooveColumn.getX(), k->slider.getBottom() + 2, grooveColumn.getWidth(), 18, juce::Justification::centred);
+        g.setColour (bone);
+        g.setFont (font (look.typewriter, 12.0f));
+        g.drawText (valueText (id), grooveColumn.getX(), k->slider.getBottom() + 18, grooveColumn.getWidth(), 14, juce::Justification::centred);
+    }
+
     g.setColour (dim);
     g.setFont (font (look.typewriter, 12.0f));
     g.drawText ("WHAT IT CHEWS", chewsArea.getX(), chewsArea.getY() - 16, 316, 14, juce::Justification::centredLeft);
@@ -889,9 +946,9 @@ void MimicEditor::paint (juce::Graphics& g)
 
     // Footer: what it hears and what it does, and the teeth.
     g.setColour (ink);
-    g.fillRect (0, 568, getWidth(), 52);
+    g.fillRect (0, 568, stage.getWidth(), 52);
     g.setColour (edge);
-    g.fillRect (0, 568, getWidth(), 2);
+    g.fillRect (0, 568, stage.getWidth(), 2);
 
     const int setTo = juce::roundToInt (value (ids::material));
     const int heard = setTo == ids::materialAuto ? juce::jlimit (0, 3, mimicProcessor.materialOut.load()) : juce::jlimit (0, 3, setTo - 1);
@@ -905,12 +962,12 @@ void MimicEditor::paint (juce::Graphics& g)
     if (mimicProcessor.sidechainMissing.load())
         status.append ("   NO PREY: route a track to PREY IN", font (look.typewriter, 13.0f), redBright);
 
-    status.draw (g, juce::Rectangle<float> (24.0f, 578.0f, 440.0f, 32.0f));
+    status.draw (g, juce::Rectangle<float> (24.0f, 578.0f, 550.0f, 32.0f));
 
     for (int i = 0; i < numTeeth; ++i)
     {
         const float level = juce::jlimit (0.0f, 1.0f, mimicProcessor.toothOut[i].load() * 3.0f);
-        const float x = 476.0f + (float) (i % 3) * 96.0f;
+        const float x = 586.0f + (float) (i % 3) * 96.0f;
         const float y = 577.0f + (float) (i / 3) * 20.0f;
         juce::Path tooth;
         tooth.addTriangle (x, y + 2.0f, x + 11.0f, y + 2.0f, x + 5.5f, y + 14.0f);
@@ -948,7 +1005,7 @@ void MimicEditor::paintDrawer (juce::Graphics& g)
     g.setColour (dim);
     g.setFont (font (look.typewriter, 11.0f));
     g.drawFittedText ("A resonant filter that moves with the grid.",
-                      throatArea.getX() + 122, throatArea.getY() + 34, throatArea.getWidth() - 130, 50, juce::Justification::centredLeft, 4);
+                      throatArea.getX() + 124, throatArea.getY() + 34, throatArea.getWidth() - 132, 50, juce::Justification::centredLeft, 4);
 
     // What the prey is doing.
     const int source = juce::roundToInt (value (ids::prey));
@@ -965,25 +1022,34 @@ void MimicEditor::paintDrawer (juce::Graphics& g)
 
 void MimicEditor::resized()
 {
+    stage.setBounds (spineWidth, 0, contentWidth, getHeight());
+
     // Header.
-    save.setBounds (806, 14, 70, 44);
-    next.setBounds (756, 14, 44, 44);
-    presetBox.setBounds (520, 14, 230, 44);
-    previous.setBounds (470, 14, 44, 44);
+    save.setBounds (916, 14, 70, 44);
+    next.setBounds (866, 14, 44, 44);
+    presetBox.setBounds (630, 14, 230, 44);
+    previous.setBounds (580, 14, 44, 44);
 
-    // Front page.
+    // Front page: the chest and Bite, the groove column, then the rest.
     bite.slider.setBounds (172, 308, 196, 196);
-    wildButton.setBounds (560, 88, 158, 50);
-    fillButton.setBounds (718, 88, 158, 50);
-    speed.slider.setBounds (604, 156, 60, 60);
-    mix.slider.setBounds (768, 156, 60, 60);
 
-    chewsArea = { 560, 284, 316, 64 };
+    grooveColumn = { 562, 80, 100, 480 };
 
+    for (auto [k, y] : { std::pair<Knob*, int> { &breaks, 96 }, { &throwKnob, 256 }, { &dynamicsKnob, 416 } })
+        k->slider.setBounds (grooveColumn.getX() + 12, y, 76, 76);
+
+    wildButton.setBounds (670, 88, 158, 50);
+    fillButton.setBounds (828, 88, 158, 50);
+    speed.slider.setBounds (714, 156, 60, 60);
+    mix.slider.setBounds (878, 156, 60, 60);
+
+    chewsArea = { 670, 284, 316, 64 };
+
+    // Nine switches: five on top, four below.
     for (int i = 0; i < numContent; ++i)
-        contents[i].button.setBounds (chewsArea.getX() + (i % 4) * 79, chewsArea.getY() + (i / 4) * 34, 76, 30);
+        contents[i].button.setBounds (chewsArea.getX() + (i % 5) * 63 + (i >= 5 ? 32 : 0), chewsArea.getY() + (i / 5) * 34, 60, 30);
 
-    modeArea = { 560, 360, 316, 200 };
+    modeArea = { 670, 360, 316, 200 };
     const int mx = modeArea.getX() + 14, my = modeArea.getY() + 10;
 
     auto placePick = [] (Pick& p, int x, int y, int w)
@@ -1002,14 +1068,14 @@ void MimicEditor::resized()
     patternArea = fillMode() ? juce::Rectangle<int> (mx, my + 58, 220, 70)
                              : juce::Rectangle<int> (mx, my + 58, 288, 64);
 
-    advancedButton.setBounds (770, 576, 110, 36);
+    advancedButton.setBounds (880, 576, 110, 36);
 
     // The drawer, below the front page.
-    drawer.setBounds (0, frontHeight, getWidth(), drawerHeight);
-    grooveArea = { 8, 10, 176, 218 };
-    throatArea = { 190, 10, 224, 218 };
-    fillsArea = { 420, 10, 150, 218 };
-    preyArea = { 576, 10, 316, 218 };
+    drawer.setBounds (0, frontHeight, stage.getWidth(), drawerHeight);
+    grooveArea = { 8, 10, 150, 218 };
+    throatArea = { 164, 10, 250, 218 };
+    fillsArea = { 420, 10, 170, 218 };
+    preyArea = { 596, 10, 406, 218 };
 
     auto placeKnob = [] (Knob& k, int x, int y, int size)
     {
@@ -1017,35 +1083,33 @@ void MimicEditor::resized()
         k.slider.setBounds (x, y + 16, size, size + 16);
     };
 
-    placeKnob (swing, 22, 38, 44);
-    placeKnob (breaks, 76, 38, 44);
-    placeKnob (throwKnob, 130, 38, 44);
-    placeKnob (output, 40, 128, 44);
-    placeKnob (monoBass, 106, 128, 44);
+    placeKnob (swing, 61, 38, 44);
+    placeKnob (output, 26, 128, 44);
+    placeKnob (monoBass, 94, 128, 44);
 
-    placePick (throatType, 202, 38, 110);
-    placeKnob (cutoff, 202, 128, 42);
-    placeKnob (resonance, 254, 128, 42);
-    placeKnob (move, 306, 128, 42);
-    placeKnob (glide, 358, 128, 42);
+    placePick (throatType, 176, 38, 110);
+    placeKnob (cutoff, 178, 128, 42);
+    placeKnob (resonance, 236, 128, 42);
+    placeKnob (move, 294, 128, 42);
+    placeKnob (glide, 352, 128, 42);
 
-    placeKnob (anticipation, 436, 38, 44);
-    placeKnob (lure, 506, 38, 44);
-    replace.button.setBounds (430, 124, 132, 22);
-    escalate.button.setBounds (430, 148, 132, 22);
-    keep.button.setBounds (430, 172, 132, 22);
-    reroll.setBounds (430, 196, 132, 26);
+    placeKnob (anticipation, 440, 38, 44);
+    placeKnob (lure, 520, 38, 44);
+    replace.button.setBounds (432, 124, 150, 22);
+    escalate.button.setBounds (432, 148, 150, 22);
+    keep.button.setBounds (432, 172, 150, 22);
+    reroll.setBounds (432, 196, 150, 26);
 
-    placePick (prey, 588, 36, 140);
-    placePick (material, 736, 36, 144);
-    preyMeter = { 588, 104, 292, 6 };
+    placePick (prey, 610, 36, 184);
+    placePick (material, 802, 36, 188);
+    preyMeter = { 610, 104, 380, 6 };
 
     Knob* teeth[] { &slicer, &shaper, &filter, &pitcher, &voiceTooth, &possess };
 
     for (int i = 0; i < numTeeth; ++i)
     {
-        const int x = 592 + i * 50;
-        placeKnob (*teeth[i], x, 116, 40);
-        inverts[i].button.setBounds (x - 5, 192, 50, 20);
+        const int x = 618 + i * 64;
+        placeKnob (*teeth[i], x, 116, 44);
+        inverts[i].button.setBounds (x - 4, 192, 56, 20);
     }
 }

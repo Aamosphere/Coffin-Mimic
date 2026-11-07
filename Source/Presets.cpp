@@ -21,11 +21,12 @@ namespace mimic
                     jassertfalse;
             }
 
-            // Every content on.
+            // Every content on (but Echo, which came later: the presets
+            // keep the sound they were made with).
             void all()
             {
                 for (auto* id : ids::contentIds)
-                    set (id, 1.0f);
+                    set (id, juce::String (id) == ids::useEcho ? 0.0f : 1.0f);
             }
 
             // Turns on only the listed fill contents.
@@ -330,6 +331,17 @@ namespace mimic
                     b.only ({ useStutter, useRoll, useReverse, useTape, useGrains });
                     b.set (prey, preyMidi);
                     b.set (possess, 1.0f);
+                } },
+
+                // v0.7: the granular delay, with each material's own
+                // versions (shards on a melody, fog on pads) and dynamics.
+                { "Dissolving Echoes", "echo, granular", false, [] (Builder& b)
+                {
+                    b.wild (0.35f, 0.6f);
+                    b.only ({ useEcho, useStutter, useRoll, useGrains, useMash });
+                    b.set (dynamics, 0.5f);
+                    b.set (breaks, 0.25f);
+                    b.set (seed, 21.0f);
                 } }
             };
 

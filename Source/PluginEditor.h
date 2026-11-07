@@ -21,6 +21,8 @@ public:
     void timerCallback() override;
 
     static constexpr int frontHeight = 620, drawerHeight = 236;
+    // The Aamosphere spine on the left, then the plugin.
+    static constexpr int spineWidth = 56, contentWidth = 1010;
 
 private:
     struct Look : juce::LookAndFeel_V4
@@ -75,6 +77,7 @@ private:
     void paintModePanel (juce::Graphics&);
     void paintPattern (juce::Graphics&, juce::Rectangle<float>);
     void paintDrawer (juce::Graphics&);
+    void paintFront (juce::Graphics&);
     juce::String valueText (const char* id) const;
     float value (const char* id) const;
     bool fillMode() const;
@@ -83,8 +86,12 @@ private:
     Look look;
     juce::TooltipWindow tooltips { this, 500 };
 
+    // Everything but the spine sits on the stage.
+    Drawer stage;
+
     // Front page.
     Knob bite, speed, mix;
+    Knob breaks, throwKnob, dynamicsKnob;   // the groove column
     Switch contents[mimic::numContent];
     juce::TextButton wildButton { "WILD" }, fillButton { "FILL" }, advancedButton { "ADVANCED" };
     std::unique_ptr<juce::ParameterAttachment> modeAttachment;
@@ -97,7 +104,7 @@ private:
 
     // The drawer.
     Drawer drawer;
-    Knob swing, breaks, throwKnob, output, monoBass;
+    Knob swing, output, monoBass;
     Pick throatType;
     Knob cutoff, resonance, move, glide;
     Knob anticipation, lure;
@@ -108,7 +115,7 @@ private:
     Knob slicer, shaper, filter, pitcher, voiceTooth, possess;
     Switch inverts[numTeeth];
 
-    juce::Rectangle<int> chewsArea, modeArea, patternArea;
+    juce::Rectangle<int> chewsArea, modeArea, patternArea, grooveColumn;
     juce::Rectangle<int> grooveArea, throatArea, fillsArea, preyArea, preyMeter;
     juce::String presetShown;
     float lidOpen = 0.0f;       // smoothed lift, 0..1+

@@ -175,6 +175,9 @@ namespace
         int fillsHeard = 0;
         unsigned kindsSeen = 0;    // one bit per mimic::Kind heard at block ends
         double firstFillPpq = -1.0;
+        std::vector<double> fillStarts, possessAt;
+        int restBlocks = 0, loudRestBlocks = 0;   // blocks the shown script says are a Break
+        float loudestRest = 0.0f;
     };
 
     void setParam (MimicProcessor& p, const char* id, float plain)
@@ -185,7 +188,7 @@ namespace
 
     RenderResult render (const juce::AudioBuffer<float>& input, const std::function<void (MimicProcessor&)>& setup,
                    const juce::AudioBuffer<float>* prey = nullptr, const juce::MidiBuffer* midi = nullptr,
-                   double loopPpq = 0.0)
+                   double loopPpq = 0.0, double loopStartPpq = 0.0)
     {
         MimicProcessor p;
 
@@ -241,7 +244,9 @@ namespace
             head.ppq = start / sampleRate * bpm / 60.0;
 
             if (loopPpq > 0.0)
-                head.ppq = std::fmod (head.ppq, loopPpq);
+                head.ppq = loopStartPpq + std::fmod (head.ppq, loopPpq);
+
+            const int possessBefore = p.possessCount.load();
 
             p.processBlock (block, m);
 
@@ -253,15 +258,46 @@ namespace
 
             res.kindsSeen |= 1u << juce::jlimit (0, 31, p.kindOut.load());
 
+            if (p.possessCount.load() != possessBefore)
+                res.possessAt.push_back (p.lastPossessPpq.load());
+
             if (p.inFillOut.load() && ! wasFill)
             {
                 ++res.fillsHeard;
+                res.fillStarts.push_back (head.ppq);
 
                 if (res.firstFillPpq < 0.0)
                     res.firstFillPpq = head.ppq;
             }
 
             wasFill = p.inFillOut.load();
+
+            // Is this whole block inside a Break of the script on show?
+            {
+                const double blockPpq = n / sampleRate * bpm / 60.0;
+                const double end = p.shownPosition.load(), begin = end - blockPpq;
+                bool inRest = false;
+
+                for (int k = 0; k < p.shownCount.load() && end >= 0.0 && begin >= 0.0; ++k)
+                {
+                    const auto packed = p.shownSegments[(size_t) k].load();
+                    const double segStart = (packed & 0xfff) / 96.0, segLength = ((packed >> 12) & 0xfff) / 96.0;
+
+                    if ((int) (packed >> 24) == (int) mimic::Kind::rest && begin >= segStart + 0.01 && end <= segStart + segLength - 0.01)
+                        inRest = true;
+                }
+
+                if (inRest)
+                {
+                    float rms = 0.0f;
+                    for (int i = 0; i < n; ++i)
+                        rms += block.getSample (0, i) * block.getSample (0, i);
+                    rms = std::sqrt (rms / (float) n);
+                    ++res.restBlocks;
+                    res.loudRestBlocks += rms > 0.05f ? 1 : 0;
+                    res.loudestRest = juce::jmax (res.loudestRest, rms);
+                }
+            }
 
             for (int ch = 0; ch < 2; ++ch)
             {
@@ -367,10 +403,36 @@ int main (int argc, char** argv)
         });
 
         const bool rests = (r.kindsSeen & (1u << (int) mimic::Kind::rest)) != 0;
-        const bool good = rests == (amount > 0.5f);
+        const bool good = rests == (amount > 0.5f) && r.loudRestBlocks == 0;
         ok = ok && good;
-        std::printf ("breaks %.0f %%, bite 10 %%         %s rests heard: %s\n", amount * 100.0f, good ? "ok  " : "FAIL", rests ? "yes" : "no");
+        std::printf ("breaks %.0f %%, bite 10 %%         %s rests heard: %s, %d blocks in a Break, %d of them not silent (loudest rms %.3f)\n",
+                     amount * 100.0f, good ? "ok  " : "FAIL", rests ? "yes" : "no", r.restBlocks, r.loudRestBlocks, r.loudestRest);
         writeWav (folder.getChildFile (juce::String ("breaks ") + (amount > 0.5f ? "100" : "0") + " - drums.wav"), r.out);
+    }
+
+    // Breaks stay silent whatever else is on.
+    {
+        struct Case { const char* name; std::function<void (MimicProcessor&)> extra; };
+        const Case cases[] {
+            { "bite 60", [] (MimicProcessor& p) { setParam (p, mimic::ids::bite, 0.6f); } },
+            { "speed 1/32", [] (MimicProcessor& p) { setParam (p, mimic::ids::speed, 1.0f); } },
+            { "speed 1/8", [] (MimicProcessor& p) { setParam (p, mimic::ids::speed, 0.3f); } },
+            { "add mode", [] (MimicProcessor& p) { setParam (p, mimic::ids::replace, 0.0f); } },
+            { "throw", [] (MimicProcessor& p) { setParam (p, mimic::ids::throwAmount, 0.6f); } },
+            { "fill mode", [] (MimicProcessor& p) { setParam (p, mimic::ids::mode, mimic::ids::modeFill); setParam (p, mimic::ids::fillEvery, 0.0f); setParam (p, mimic::ids::fillLength, 2.0f); } },
+            { "swing", [] (MimicProcessor& p) { setParam (p, mimic::ids::swing, 0.7f); } },
+            { "throat", [] (MimicProcessor& p) { setParam (p, mimic::ids::filterType, 1.0f); setParam (p, mimic::ids::resonance, 0.8f); } },
+            { "all chews", [] (MimicProcessor& p) { for (auto* id : mimic::ids::contentIds) setParam (p, id, 1.0f); setParam (p, mimic::ids::bite, 0.5f); } },
+        };
+
+        for (const auto& c : cases)
+        {
+            auto r = render (drumLoop, [&c] (MimicProcessor& p) { setParam (p, mimic::ids::breaks, 1.0f); c.extra (p); });
+            const bool good = r.loudRestBlocks == 0 && r.maxJump < 1.6f;
+            ok = ok && good;
+            std::printf ("silent breaks, %-14s  %s %d blocks in a Break, %d not silent (loudest rms %.3f), jump x%.1f\n",
+                         c.name, good ? "ok  " : "FAIL", r.restBlocks, r.loudRestBlocks, r.loudestRest, r.maxJump);
+        }
     }
 
     // A looped bar: the same every pass, or new every pass. (The loop is
@@ -576,6 +638,142 @@ int main (int argc, char** argv)
         }
     }
 
+    // A cycle loop over bars 2-3 with a fill every 2 bars: the fill is at the
+    // end of bar 2 on every pass, never in bar 3.
+    for (int evolve = 0; evolve < 2; ++evolve)
+    {
+        auto r = render (drumLoop, [evolve] (MimicProcessor& p)
+        {
+            setParam (p, mimic::ids::mode, mimic::ids::modeFill);
+            setParam (p, mimic::ids::fillEvery, 1.0f);
+            setParam (p, mimic::ids::fillLength, (float) mimic::ids::lastBeat);
+            setParam (p, mimic::ids::loop, (float) evolve);
+        }, nullptr, nullptr, 8.0, 4.0);
+
+        int wrong = 0;
+        for (auto f : r.fillStarts)
+            wrong += (f >= 7.0 - 0.05 && f < 8.0) ? 0 : 1;
+
+        const bool good = r.fillStarts.size() >= 6 && wrong == 0;
+        ok = ok && good;
+        std::printf ("loop bars 2-3, fills / 2 bars  %s %s: %d fills, %d not at the end of bar 2\n", good ? "ok  " : "FAIL",
+                     mimic::ids::loopNames[evolve].toRawUTF8(), (int) r.fillStarts.size(), wrong);
+    }
+
+    // Possess keeps time: a prey that hits off the grid fires events on it.
+    {
+        juce::AudioBuffer<float> sloppy (2, drumLoop.getNumSamples());
+        sloppy.clear();
+        juce::Random rr (3);
+        const double sixteenth = sampleRate * 60.0 / bpm / 4.0;
+
+        for (int h = 0; h < (int) (sloppy.getNumSamples() / sixteenth) - 1; h += 3)
+        {
+            const int at = (int) (h * sixteenth + rr.nextFloat() * sixteenth * 0.8);
+            for (int n = 0; n < 2000 && at + n < sloppy.getNumSamples(); ++n)
+            {
+                const float x = 0.6f * noise (rr) * std::exp (-(float) n / 300.0f);
+                sloppy.setSample (0, at + n, x);
+                sloppy.setSample (1, at + n, x);
+            }
+        }
+
+        auto r = render (drumLoop, [] (MimicProcessor& p)
+        {
+            setParam (p, mimic::ids::bite, 0.0f);
+            setParam (p, mimic::ids::prey, mimic::ids::preySidechain);
+            setParam (p, mimic::ids::possess, 1.0f);
+        }, &sloppy);
+
+        int offGrid = 0;
+        for (auto at : r.possessAt)
+        {
+            const double steps = at / 0.25;
+            const double into = steps - std::floor (steps + 0.001);
+            const bool off = into >= 0.21;
+            offGrid += off ? 1 : 0;
+
+            if (off && std::getenv ("MIMIC_DEBUG") != nullptr)
+                std::printf ("   off grid at ppq %.4f\n", at);
+        }
+
+        const bool good = r.possessAt.size() > 20 && offGrid == 0;
+        ok = ok && good;
+        std::printf ("possess on a sloppy prey       %s %d events, %d off the 1/16 grid\n", good ? "ok  " : "FAIL", (int) r.possessAt.size(), offGrid);
+    }
+
+    // Dynamics: the same pattern with more level differences, still the same
+    // on every bounce.
+    {
+        auto setup = [] (float d)
+        {
+            return [d] (MimicProcessor& p) { setParam (p, mimic::ids::bite, 0.7f); setParam (p, mimic::ids::dynamics, d); };
+        };
+
+        auto flat = render (drumLoop, setup (0.0f)), dyn = render (drumLoop, setup (1.0f)), again = render (drumLoop, setup (1.0f));
+        float diff = 0.0f, rerender = 0.0f;
+
+        for (int i = 0; i < dyn.out.getNumSamples(); ++i)
+        {
+            diff = juce::jmax (diff, std::abs (dyn.out.getSample (0, i) - flat.out.getSample (0, i)));
+            rerender = juce::jmax (rerender, std::abs (dyn.out.getSample (0, i) - again.out.getSample (0, i)));
+        }
+
+        const bool good = diff > 0.05f && rerender == 0.0f && dyn.finite && dyn.maxJump < 1.6f;
+        ok = ok && good;
+        std::printf ("dynamics 0 / 100 %%             %s max difference %.2f, rerender %g, jump x%.1f\n", good ? "ok  " : "FAIL", diff, rerender, dyn.maxJump);
+        writeWav (folder.getChildFile ("dynamics 100 - drums.wav"), dyn.out);
+    }
+
+    // Each material has its own versions: shards and bends on a melody, fog
+    // on a pad. Echo rings on with any of them.
+    {
+        struct Case { const char* name; const juce::AudioBuffer<float>* in; unsigned want; };
+        const Case cases[] {
+            { "melody", &lead, (1u << (int) mimic::Kind::shards) | (1u << (int) mimic::Kind::bend) },
+            { "pad", &chords, 1u << (int) mimic::Kind::fog },
+            { "voice", &singer, 1u << (int) mimic::Kind::bend },
+        };
+
+        for (const auto& c : cases)
+        {
+            auto r = render (*c.in, [] (MimicProcessor& p)
+            {
+                setParam (p, mimic::ids::bite, 0.7f);
+                for (auto* id : mimic::ids::contentIds)
+                    setParam (p, id, 0.0f);
+                for (auto* id : { mimic::ids::useStutter, mimic::ids::useRoll, mimic::ids::useGrains })
+                    setParam (p, id, 1.0f);
+            });
+
+            const bool good = (r.kindsSeen & c.want) == c.want && r.finite && r.peak < 2.0f && r.maxJump < 2.0f;
+            ok = ok && good;
+            std::printf ("%-8s own versions        %s heard 0x%04x, peak %.2f, jump x%.1f\n", c.name, good ? "ok  " : "FAIL", r.kindsSeen, r.peak, r.maxJump);
+            writeWav (folder.getChildFile (juce::String ("material versions - ") + c.name + ".wav"), r.out);
+        }
+
+        for (auto [name, in] : { std::pair<const char*, const juce::AudioBuffer<float>*> { "drums", &drumLoop }, { "melody", &lead }, { "voice", &singer } })
+        {
+            auto r = render (*in, [] (MimicProcessor& p)
+            {
+                setParam (p, mimic::ids::bite, 0.6f);
+                for (auto* id : mimic::ids::contentIds)
+                    setParam (p, id, 0.0f);
+                setParam (p, mimic::ids::useEcho, 1.0f);
+                setParam (p, mimic::ids::useMash, 1.0f);
+            });
+
+            float diff = 0.0f;
+            for (int i = 0; i < r.out.getNumSamples(); ++i)
+                diff = juce::jmax (diff, std::abs (r.out.getSample (0, i) - in->getSample (0, i)));
+
+            const bool good = (r.kindsSeen & (1u << (int) mimic::Kind::echo)) != 0 && diff > 0.05f && r.finite && r.peak < 2.0f;
+            ok = ok && good;
+            std::printf ("echo on %-8s             %s heard 0x%04x, peak %.2f, jump x%.1f\n", name, good ? "ok  " : "FAIL", r.kindsSeen, r.peak, r.maxJump);
+            writeWav (folder.getChildFile (juce::String ("echo - ") + name + ".wav"), r.out);
+        }
+    }
+
     // Every factory preset on the drum loop, the melody and the pad.
     const auto& factory = mimic::PresetManager::getFactory();
 
@@ -624,8 +822,13 @@ int main (int argc, char** argv)
                     setParam (p, mimic::ids::contentIds[i], i == c ? 1.0f : 0.0f);
             });
 
-            const unsigned allowed = (1u << (int) mimic::Kind::pass) | (1u << (int) mimic::contentKinds[c]);
-            const bool good = (r.kindsSeen & ~allowed) == 0 && (r.kindsSeen & (1u << (int) mimic::contentKinds[c])) != 0;
+            unsigned allowed = 1u << (int) mimic::Kind::pass;
+
+            for (int k = 0; k < 32; ++k)
+                if (mimic::belongsTo ((mimic::Kind) k, mimic::contentKinds[c]))
+                    allowed |= 1u << k;
+
+            const bool good = (r.kindsSeen & ~allowed) == 0 && (r.kindsSeen & allowed & ~1u) != 0;
             ok = ok && good;
             std::printf ("only %-8s %-5s %s heard 0x%03x\n", mimic::ids::contentNames[c].toRawUTF8(),
                          fillMode ? "fill" : "wild", good ? "ok  " : "FAIL", r.kindsSeen);

@@ -46,12 +46,30 @@ namespace mimic
     // quarter notes. The script is pure data, generated from a seed.
     // slice: a grid piece of the track taken from another place (the beat
     // masher). rest: a Break (silence).
-    enum class Kind : uint8_t { pass, stutter, roll, reverse, scatter, tape, gate, grains, rest, slice };
+    //
+    // What the content switches turn into depends on the material. On a
+    // melody a stutter may become shards (the loop layered with itself an
+    // octave up and down) and a roll a bend (a loop gliding to a new
+    // pitch); on chords and pads stutters and grains may become fog (a
+    // drifting, detuned grain haze). echo: the track plays on and is sent
+    // into the granular delay.
+    enum class Kind : uint8_t { pass, stutter, roll, reverse, scatter, tape, gate, grains, rest, slice,
+                                shards, bend, fog, echo };
 
     // The switchable kinds, in the order of the content switches.
     inline constexpr Kind contentKinds[] { Kind::stutter, Kind::roll, Kind::reverse, Kind::scatter,
-                                           Kind::tape, Kind::gate, Kind::grains, Kind::slice };
-    inline constexpr int numContent = 8;
+                                           Kind::tape, Kind::gate, Kind::grains, Kind::slice, Kind::echo };
+    inline constexpr int numContent = 9;
+
+    // Does a kind come from this content switch? (Shards are stutters, a
+    // bend is a roll, fog comes from stutters or grains.)
+    inline bool belongsTo (Kind k, Kind contentSwitch)
+    {
+        if (k == Kind::shards) return contentSwitch == Kind::stutter;
+        if (k == Kind::bend)   return contentSwitch == Kind::roll;
+        if (k == Kind::fog)    return contentSwitch == Kind::stutter || contentSwitch == Kind::grains;
+        return k == contentSwitch;
+    }
 
     enum MaterialClass { percussive, melodic, harmonic, vocal };
     inline constexpr int numMaterials = 4;
@@ -223,7 +241,7 @@ namespace mimic
         int onsets = 0;
         int64_t frameSamples = 0;
         double sampleRate = 44100.0;
-        int current = harmonic, candidate = harmonic;
+        int current = percussive, candidate = percussive;   // until it has heard enough: the plainest versions
         float candidateSeconds = 0.0f;
         bool primed = false;
     };
@@ -273,6 +291,10 @@ namespace mimic
         void begin (const Segment&, int64_t now, double samplesPerPpq, int64_t lengthSamples);
         void beginPass (int64_t now);
 
+        // Dynamics, 0..1: how much the level of events and their repeats
+        // varies, with accents on the beat.
+        void setDynamics (float d) { dynamics = d; }
+
         // Slicer tooth: the prey struck. Restart the current slice, or, when
         // nothing is happening, replay the last hit of the main track.
         void strike (int64_t now, double samplesPerPpq, double stepPpq, uint32_t seed);
@@ -298,6 +320,7 @@ namespace mimic
             float rate = 1.0f;
             int length = 1, age = 0;
             float gainL = 0.7f, gainR = 0.7f;
+            float accent = 1.0f;
         };
 
         struct Voice
@@ -311,6 +334,7 @@ namespace mimic
             int64_t repStart = 0;
             int repeatIndex = 0;
             float repGain = 1.0f, slotRate = 1.0f;
+            float accent = 1.0f, repAccent = 1.0f;   // Dynamics
             bool reversed = false;
             float fade = 1.0f, fadeStep = 1.0f;     // fade in (current) or out (tail)
             Svf filter;
@@ -324,18 +348,57 @@ namespace mimic
         void startRepeat (Voice&, int64_t now);
         double swungRepeat (const Voice&, int index) const;
         void pickScatterSlot (Voice&, int64_t now);
-        void pushTail();
+        void pushTail (double fadeSeconds = 0.0015);
+        float accentFor (uint32_t seed, int index, bool onBeat) const;
         float fadeSamples (bool onsetAligned) const;
         float rateAt (const Voice&, float p) const;
         void renderVoice (Voice&, int64_t now, float inL, float inR, float& l, float& r);
         void spawnGrain (Voice&, int64_t now, float p);
 
         double sr = 44100.0;
+        float dynamics = 0.0f;
         int64_t validFrom = 0;
         const History* history = nullptr;
         const OnsetList* onsets = nullptr;
         Voice current;
         std::array<Voice, 3> tails;
+    };
+
+    //==========================================================================
+    // Echo: a tempo-synced granular delay. What is sent in comes back in
+    // overlapping grains, smeared a little in time; some grains an octave
+    // up (shimmer) or backwards, and every repeat is grained again, so the
+    // echoes dissolve as they fade.
+    class GrainDelay
+    {
+    public:
+        void prepare (double sampleRate);
+        void reset();
+        void setup (double delaySamples, float feedback, float shimmer, float reverse);
+        void process (float inL, float inR, float& outL, float& outR);
+
+    private:
+        struct Grain
+        {
+            bool on = false;
+            double pos = 0.0, rate = 1.0;
+            int age = 0, length = 1;
+            float gainL = 1.0f, gainR = 1.0f;
+        };
+
+        void spawn();
+
+        std::vector<float> buffer[2];
+        int64_t write = 0;
+        int64_t mask = 0;
+        double sr = 44100.0, delay = 22050.0;
+        float feedback = 0.5f, shimmer = 0.0f, reverse = 0.0f;
+        int grainLength = 4096, countdown = 0;
+        uint32_t grainCount = 0;
+        bool left = true;
+        std::array<Grain, 6> grains {};
+        Svf tone;
+        float fbL = 0.0f, fbR = 0.0f;
     };
 
     //==========================================================================

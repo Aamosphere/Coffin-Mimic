@@ -55,6 +55,8 @@ public:
     std::atomic<bool> transportPlaying { false };
     std::atomic<float> throwOut { 0.0f };          // a hit just went into the reverb
     std::atomic<float> pitchDriftOut { 0.0f };
+    std::atomic<int> possessCount { 0 };           // events the prey has fired
+    std::atomic<double> lastPossessPpq { 0.0 };    // song position of the last one
 
     // The script playing now, for the pattern display: per segment the
     // start and length in 1/96 ppq and the kind, packed.
@@ -131,6 +133,12 @@ private:
     mimic::Vocoder vocoder;
     float voiceMix = 0.0f, voiceStep = 0.0f, possessFlash = 0.0f;
     int64_t possessEnd = -1, possessNext = 0;
+    double chopAt = -1.0, possessAt = -1.0;   // prey hits waiting for the grid (ppq)
+
+    // Echo: the granular delay, and the Break duck on the echoes.
+    mimic::GrainDelay echoDelay;
+    float echoSend = 0.0f, echoRamp = 0.0f, restDuck = 1.0f, restDuckCoeff = 0.0f;
+    int echoAlive = 0;
 
     // Teeth.
     mimic::Svf toothFilter, riser;
@@ -152,7 +160,7 @@ private:
     mimic::OnsetDetector throwDetector;
     mimic::Rng throwRng;
     static constexpr int throwChunk = 256;
-    std::array<float, throwChunk> sendL {}, sendR {}, verbL {}, verbR {};
+    std::array<float, throwChunk> sendL {}, sendR {}, verbL {}, verbR {}, duckBuf {};
     int sendCount = 0, sendStart = 0;
     float sendEnv = 0.0f, sendAttack = 0.0f, sendRelease = 0.0f;
     int sendHold = 0, verbAlive = 0, afterFill = 0;

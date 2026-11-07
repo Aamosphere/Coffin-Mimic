@@ -77,6 +77,10 @@ namespace mimic::ids
     inline constexpr const char* possess      = "possess";
     inline constexpr const char* possessInvert = "possessInvert";
 
+    // v0.7: the granular delay switch and Dynamics.
+    inline constexpr const char* useEcho      = "useEcho";
+    inline constexpr const char* dynamics     = "dynamics";
+
     enum Loop { loopRepeat, loopEvolve };
     inline const juce::StringArray loopNames { "Same every pass", "New every pass" };
 
@@ -106,6 +110,6 @@ namespace mimic::ids
     inline const juce::StringArray materialNames { "Auto", "Percussive", "Melodic", "Harmonic", "Voice" };
 
     // The content switches, in the order of mimic::contentKinds.
-    inline const char* const contentIds[] { useStutter, useRoll, useReverse, useScatter, useTape, useGate, useGrains, useMash };
-    inline const juce::StringArray contentNames { "Stutter", "Roll", "Reverse", "Scatter", "Tape", "Gate", "Grains", "Mash" };
+    inline const char* const contentIds[] { useStutter, useRoll, useReverse, useScatter, useTape, useGate, useGrains, useMash, useEcho };
+    inline const juce::StringArray contentNames { "Stutter", "Roll", "Reverse", "Scatter", "Tape", "Gate", "Grains", "Mash", "Echo" };
 }

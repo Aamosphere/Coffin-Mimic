@@ -46,9 +46,23 @@ int main (int argc, char** argv)
             p->setValueNotifyingHost (1.0f);
 
     if (argc > 3)
-        for (auto* child : editor->getChildren())
-            if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "ADVANCED")
-                button->onClick();
+    {
+        std::function<void (juce::Component&)> openDrawer = [&] (juce::Component& c)
+        {
+            for (auto* child : c.getChildren())
+            {
+                if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "ADVANCED")
+                {
+                    button->onClick();
+                    return;
+                }
+
+                openDrawer (*child);
+            }
+        };
+
+        openDrawer (*editor);
+    }
 
 
     const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f);
