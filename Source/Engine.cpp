@@ -74,12 +74,14 @@ namespace mimic
         double pickRepeat (Rng& r, float I, int material)
         {
             const float lean = material == percussive ? 0.6f : (material == melodic ? -0.4f : -0.8f);
-            int index = juce::jlimit (0, 6, juce::roundToInt (1.2f + lean + I * 3.4f + r.range (-1.0f, 1.0f)));
+            // Bite moves the values only a little: mostly eighths and
+            // sixteenths, whatever the Bite.
+            int index = juce::jlimit (0, 6, juce::roundToInt (1.8f + lean + I * 1.6f + r.range (-0.8f, 0.8f)));
 
-            if (index == 6 && I < 0.6f)
+            if (index == 6 && I < 0.85f)
                 index = 4;                                  // 1/32 only when it bites hard
 
-            if ((index == 3 || index == 5) && ! r.chance (0.3f + 0.3f * I))
+            if ((index == 3 || index == 5) && ! r.chance (0.25f + 0.2f * I))
                 index = index == 3 ? 2 : 4;                 // triplets now and then
 
             return noteValues[index];
@@ -149,8 +151,8 @@ namespace mimic
 
                 case Kind::roll:
                     // A drummer's roll: one hit per step, then two, then four.
-                    s.repeat = juce::jmin (length, I > 0.6f ? 0.25 : 0.5);
-                    s.minRepeat = I > 0.9f ? 0.0625 : 0.125;
+                    s.repeat = juce::jmin (length, I > 0.8f ? 0.25 : 0.5);
+                    s.minRepeat = I > 0.95f ? 0.0625 : 0.125;
                     s.gainStart = r.range (0.5f, 0.75f);
                     s.punch = true;
 
@@ -336,7 +338,8 @@ namespace mimic
     {
         script.clear();
         Rng r (seed);
-        const float I = juce::jlimit (0.0f, 1.0f, g.intensity);
+        // A curve: the low half of Bite stays gentle.
+        const float I = std::pow (juce::jlimit (0.0f, 1.0f, g.intensity), 1.35f);
         const float swing = juce::jlimit (0.0f, 0.5f, g.swing);
         double step = juce::jmax (1.0 / 64.0, g.step);
 
@@ -431,13 +434,15 @@ namespace mimic
 
         if (isEnabled (g, Kind::slice))
         {
-            const int ops = juce::roundToInt (I * (float) spanSteps * 0.3f + r.uni() * 2.0f * I);
+            const int ops = juce::roundToInt (I * (float) spanSteps * 0.22f + r.uni() * 1.5f * I);
             bool downbeatDone = false;
 
             for (int o = 0; o < ops; ++o)
             {
                 const float x = r.uni();
-                int length = x < 0.25f * (1.0f - I) ? unitsPerBeat : (x < 0.75f ? juce::jmax (1, unitsPerBeat / 2) : 1);
+                // Mostly eighths; single steps only when it bites hard.
+                int length = x < 0.3f * (1.0f - I) ? unitsPerBeat
+                           : (x < (I > 0.5f ? 0.8f : 1.0f) ? juce::jmax (1, unitsPerBeat / 2) : 1);
                 length = juce::jmin (length, spanSteps);
                 const int slots = spanSteps / length;
 
@@ -446,7 +451,7 @@ namespace mimic
 
                 int d = r.below (slots) * length;
 
-                if (! downbeatDone && r.chance (0.12f + 0.4f * I))
+                if (! downbeatDone && r.chance (0.08f + 0.3f * I))
                 {
                     d = 0;
                     downbeatDone = true;
@@ -480,7 +485,7 @@ namespace mimic
                         chunk[(size_t) (e + j)] = 0;
                     }
                 }
-                else if (t < 0.85f || I < 0.35f)
+                else if (t < 0.85f || I < 0.5f)
                 {
                     const int e = r.below (slots) * length;
                     std::array<int, 64> copy = map;
@@ -498,8 +503,8 @@ namespace mimic
         }
 
         // Then events on top, sparser when the masher is doing the work.
-        const float density = isEnabled (g, Kind::slice) ? 0.02f + 0.4f * std::pow (I, 1.4f)
-                                                         : 0.03f + 0.85f * std::pow (I, 1.5f);
+        const float density = isEnabled (g, Kind::slice) ? 0.01f + 0.22f * std::pow (I, 1.6f)
+                                                         : 0.02f + 0.55f * std::pow (I, 1.5f);
 
         while (at < spanSteps)
         {
@@ -507,7 +512,7 @@ namespace mimic
 
             if (r.chance (density * (0.6f + 0.8f * position)))
             {
-                const int steps = juce::jmin (spanSteps - at, 1 + r.below (I < 0.35f ? 2 : 4));
+                const int steps = juce::jmin (spanSteps - at, 1 + r.below (I < 0.35f ? 2 : 3));
                 const double start = startOf (at), end = endOf (at + steps);
                 const auto kind = pickKind (r, gs, false, previous, false);
 

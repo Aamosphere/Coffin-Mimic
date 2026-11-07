@@ -129,6 +129,7 @@ namespace
         double cleanError = 0.0;   // largest |out - in| outside fills (fill mode)
         int cleanWhere = -1;
         int fillsHeard = 0;
+        unsigned kindsSeen = 0;    // one bit per mimic::Kind heard at block ends
     };
 
     void setParam (MimicProcessor& p, const char* id, float plain)
@@ -190,6 +191,8 @@ namespace
             const bool engagedNow = p.engageOut.load() > 0.0f || p.inFillOut.load();
             const bool engaged = engagedNow || wasEngaged;
             wasEngaged = engagedNow;
+
+            res.kindsSeen |= 1u << juce::jlimit (0, 31, p.kindOut.load());
 
             if (p.inFillOut.load() && ! wasFill)
                 ++res.fillsHeard;
@@ -306,6 +309,30 @@ int main (int argc, char** argv)
             // Echo presets let the reverb tail ring on after a fill.
             report (factory[i].name + " / " + suffix, r, factory[i].fill && ! factory[i].tags.contains ("echo"));
             writeWav (folder.getChildFile (juce::String (i).paddedLeft ('0', 2) + " " + factory[i].name + " - " + suffix + ".wav"), r.out);
+        }
+    }
+
+    // Nothing leaks: with one content switch on, only that content plays.
+    for (int c = 0; c < mimic::numContent; ++c)
+    {
+        for (int fillMode = 0; fillMode < 2; ++fillMode)
+        {
+            auto r = render (drumLoop, [c, fillMode] (MimicProcessor& p)
+            {
+                setParam (p, mimic::ids::mode, fillMode ? mimic::ids::modeFill : mimic::ids::modeWild);
+                setParam (p, mimic::ids::bite, 1.0f);
+                setParam (p, mimic::ids::fillEvery, 0.0f);
+                setParam (p, mimic::ids::fillLength, (float) mimic::ids::lastBar);
+
+                for (int i = 0; i < mimic::numContent; ++i)
+                    setParam (p, mimic::ids::contentIds[i], i == c ? 1.0f : 0.0f);
+            });
+
+            const unsigned allowed = (1u << (int) mimic::Kind::pass) | (1u << (int) mimic::contentKinds[c]);
+            const bool good = (r.kindsSeen & ~allowed) == 0 && (r.kindsSeen & (1u << (int) mimic::contentKinds[c])) != 0;
+            ok = ok && good;
+            std::printf ("only %-8s %-5s %s heard 0x%03x\n", mimic::ids::contentNames[c].toRawUTF8(),
+                         fillMode ? "fill" : "wild", good ? "ok  " : "FAIL", r.kindsSeen);
         }
     }
 

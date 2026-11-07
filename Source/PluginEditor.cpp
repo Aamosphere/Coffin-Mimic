@@ -13,7 +13,8 @@ namespace
     const juce::Colour bone     { 0xfff1e6bf };
     const juce::Colour dim      { 0xff8c7d70 };
 
-    const char* const kindNames[] { "-", "STUTTER", "ROLL", "REVERSE", "SCATTER", "TAPE", "GATE", "GRAINS" };
+    // One name per mimic::Kind, in its order.
+    const char* const kindNames[] { "-", "STUTTER", "ROLL", "REVERSE", "SCATTER", "TAPE", "GATE", "GRAINS", "BREAK", "MASH" };
     const char* const materialNames[] { "PERCUSSIVE", "MELODIC", "HARMONIC" };
     const char* const invertIds[] { ids::slicerInvert, ids::shaperInvert, ids::filterInvert, ids::pitcherInvert };
 
@@ -329,7 +330,7 @@ void MimicEditor::paint (juce::Graphics& g)
     const auto s = statusArea.reduced (14, 8);
     const bool wildMode = (int) mimicProcessor.parameters.getRawParameterValue (ids::mode)->load() == ids::modeWild;
     const int heard = juce::jlimit (0, 2, mimicProcessor.materialOut.load());
-    const int kind = juce::jlimit (0, 7, mimicProcessor.kindOut.load());
+    const int kind = juce::jlimit (0, (int) std::size (kindNames) - 1, mimicProcessor.kindOut.load());
     const int bars = mimicProcessor.barsToFillOut.load();
 
     juce::String text;
