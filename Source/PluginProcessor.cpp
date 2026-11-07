@@ -96,9 +96,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
 
     pick (ids::prey, "Prey", ids::preyNames, ids::preySelf);
     pick (ids::material, "Material", ids::materialNames, ids::materialAuto);
-    add (ids::slicer, "Slicer", { 0.0f, 1.0f }, 0.5f, percent);
+    // The teeth rest until they are turned up.
+    add (ids::slicer, "Slicer", { 0.0f, 1.0f }, 0.0f, percent);
     add (ids::shaper, "Shaper", { 0.0f, 1.0f }, 0.0f, percent);
-    add (ids::filter, "Filter", { 0.0f, 1.0f }, 0.25f, percent);
+    add (ids::filter, "Filter", { 0.0f, 1.0f }, 0.0f, percent);
     add (ids::pitcher, "Pitcher", { 0.0f, 1.0f }, 0.0f, percent);
     toggle (ids::slicerInvert, "Slicer Invert", false);
     toggle (ids::shaperInvert, "Shaper Invert", false);
@@ -122,6 +123,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
          AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return v < 1000.0f ? String (roundToInt (v)) + " Hz" : String (v / 1000.0f, 1) + " kHz"; }));
     add (ids::resonance, "Resonance", { 0.0f, 1.0f }, 0.3f, percent);
     add (ids::filterMove, "Filter Move", { 0.0f, 1.0f }, 0.5f, percent);
+
+    pick (ids::loop, "Loop", ids::loopNames, ids::loopEvolve);
+    pick (ids::phraseStart, "Phrase Start", ids::phraseStartNames, 0);
+    add (ids::filterGlide, "Filter Glide", { 0.0f, 1.0f }, 1.0f,
+         AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return v < 0.005f ? String ("Steps") : String (roundToInt (v * 100.0f)) + " %"; }));
 
     return layout;
 }
@@ -163,7 +169,10 @@ void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     riser.reset();
     throat.reset();
     throatStep = std::numeric_limits<int64_t>::min();
-    throatJump = throatOctaves = 0.0f;
+    throatJump = throatOctaves = throatFrom = throatRamp = 0.0f;
+    throatRampStep = 1.0f;
+    loopOffset = 0;
+    lastRawBar = std::numeric_limits<int64_t>::min();
     throatGlide = coeff (0.008, sr);
 
     preyAtt = coeff (0.001, sr);
@@ -238,6 +247,8 @@ void MimicProcessor::startSpan (int64_t key, double start, const GenSettings& g,
     const auto seed = spanSeed (keep ? keptKey.load() : seedKey);
     generate (script, g, seed);
 
+    publishScript (g.span);
+
     // Never the same fill twice in a row: compare with the fill before.
     // (Wild patterns repeat on purpose.)
     if (! keep && g.fill)
@@ -245,11 +256,30 @@ void MimicProcessor::startSpan (int64_t key, double start, const GenSettings& g,
         generate (previousScript, g, spanSeed (seedKey - 4));
 
         if (previousScript.signature() == script.signature())
+        {
             generate (script, g, hash64 (seed, 77));
+            publishScript (g.span);
+        }
     }
 
     slicerRng = Rng (hash64 (seed, 5));
     throwRng = Rng (hash64 (seed, 6));
+}
+
+void MimicProcessor::publishScript (double span)
+{
+    const int count = juce::jmin (script.count, maxShown);
+
+    for (int i = 0; i < count; ++i)
+    {
+        const auto& seg = script.segments[(size_t) i];
+        const auto start = (uint32_t) juce::jlimit (0, 4095, (int) std::lround (seg.start * 96.0));
+        const auto length = (uint32_t) juce::jlimit (0, 4095, (int) std::lround (seg.length * 96.0));
+        shownSegments[(size_t) i].store (start | (length << 12) | ((uint32_t) seg.kind << 24), std::memory_order_relaxed);
+    }
+
+    shownSpan.store ((float) span, std::memory_order_relaxed);
+    shownCount.store (count, std::memory_order_release);
 }
 
 void MimicProcessor::reroll()
@@ -325,6 +355,9 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const float cutoffHz = value (ids::cutoff);
     const float resonance = value (ids::resonance);
     const float filterMove = value (ids::filterMove);
+    const float filterGlide = value (ids::filterGlide);
+    const bool evolve = choice (ids::loop) == ids::loopEvolve;
+    const int phraseStart = choice (ids::phraseStart);
 
     if (throwAmount > 0.0f && std::abs (throwAmount - lastThrowDecay) > 0.01f)
     {
@@ -410,17 +443,32 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     double base;
 
+    bool jumped = false;
+
     if (playing)
     {
-        if (! wasPlaying || std::abs (hostPpq - expectedPpq) > juce::jmax (1.0e-3, ppqPerSample * 4.0))
+        if (! wasPlaying)
+        {
+            loopOffset = 0;
+            lastRawBar = std::numeric_limits<int64_t>::min();
             discontinuity();
+        }
+        else if (std::abs (hostPpq - expectedPpq) > juce::jmax (1.0e-3, ppqPerSample * 4.0))
+        {
+            jumped = true;
+            discontinuity();
+        }
 
         base = hostPpq;
     }
     else
     {
         if (wasPlaying)
+        {
+            loopOffset = 0;
+            lastRawBar = std::numeric_limits<int64_t>::min();
             discontinuity();
+        }
 
         base = freePpq;
     }
@@ -438,6 +486,16 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     }
 
     int64_t barIndex = (int64_t) std::llround (barStart / barLen);
+
+    // A cycle loop jumping back plays on as if the song went on, so a looped
+    // bar keeps changing (New every pass). Linear playback counts the song's
+    // own bars either way.
+    if (jumped && lastRawBar != std::numeric_limits<int64_t>::min() && barIndex <= lastRawBar)
+        loopOffset += lastRawBar + 1 - barIndex;
+
+    // Phrases start at the Phrase Start bar: a song that begins on bar 3
+    // gets its fills at the end of bars 6, 10, 14...
+    const int64_t barShift = (evolve ? loopOffset : 0) - phraseStart;
     int barsToFill = -1;
     float progressShown = 0.0f;
     bool fillShown = false;
@@ -499,6 +557,9 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             barStart += barLen;
             ++barIndex;
         }
+
+        lastRawBar = barIndex;
+        const int64_t phraseBar = barIndex + barShift;
 
         const float inL = left[i];
         const float inR = right != nullptr ? right[i] : inL;
@@ -581,9 +642,9 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             // A pattern holds for its group of bars; the last bar of the
             // group is a wilder variation, like a breakbeat edit.
             const int groupBars = ids::variationBars[juce::jlimit (0, 3, variationChoice)];
-            const int64_t group = floorDiv (barIndex, groupBars);
-            variationBar = groupBars > 1 && barIndex - group * groupBars == groupBars - 1;
-            key = spanKeyFor (barIndex, tagWild);
+            const int64_t group = floorDiv (phraseBar, groupBars);
+            variationBar = groupBars > 1 && phraseBar - group * groupBars == groupBars - 1;
+            key = spanKeyFor (phraseBar, tagWild);
             seedKey = spanKeyFor (group * 2 + (variationBar ? 1 : 0), tagWild);
             sStart = barStart;
             sLength = barLen;
@@ -591,12 +652,13 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         }
         else if (playing)
         {
-            const int64_t group = floorDiv (barIndex, every);
-            const int64_t barInGroup = barIndex - group * every;
+            const int64_t group = floorDiv (phraseBar, every);
+            const int64_t barInGroup = phraseBar - group * every;
             const double groupEnd = barStart + (double) (every - barInGroup) * barLen;
             const double fillStart = groupEnd - fillLen;
-            const bool allowed = keep || probability >= 0.999f
-                              || unit (hash64 ((uint64_t) group, (uint64_t) seedValue ^ 0xf111ull)) < probability;
+            // No fills before the phrases start.
+            const bool allowed = phraseBar >= 0 && (keep || probability >= 0.999f
+                              || unit (hash64 ((uint64_t) group, (uint64_t) seedValue ^ 0xf111ull)) < probability);
 
             if (allowed)
             {
@@ -679,8 +741,10 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             spanKey = std::numeric_limits<int64_t>::min();
         }
 
-        // How hard the teeth bite right now.
-        const float teeth = wild ? bite : (inFill ? intensity : juce::jmax (lure, antProgress * intensity));
+        // How much the teeth bite right now: fully in Wild and in a fill
+        // (their own knobs set how hard), and only with Lure or the riser
+        // between fills.
+        const float teeth = wild || inFill ? 1.0f : juce::jmax (lure, antProgress);
 
         // Slicer: the prey's strikes (or its gaps) restart the slices.
         if (slicerAmount > 0.0f && preySource != ids::preySelf && (slicerInvert ? preyGap : preyStrike)
@@ -743,24 +807,30 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             sr2 += a * (pr - sr2);
         }
 
-        // The Throat: a resonant filter. Move jumps the cutoff to a new
-        // place on every grid step (sample and hold in time), more as the
-        // Mimic bites; through a fill it sweeps shut (or open, high-pass).
+        // The Throat: a resonant filter. Move takes the cutoff to a new
+        // place on every grid step; Glide sets whether it jumps there or
+        // slides all the way. Through a fill it sweeps shut (or open,
+        // high-pass).
         if (throatType != ids::filterOff)
         {
-            const auto stepIndex = barIndex * 4096 + (int64_t) std::floor ((tl - barStart) / step + 1.0e-6);
+            const auto stepIndex = phraseBar * 4096 + (int64_t) std::floor ((tl - barStart) / step + 1.0e-6);
 
             if (stepIndex != throatStep)
             {
                 throatStep = stepIndex;
                 const auto h = hash64 ((uint64_t) stepIndex, (uint64_t) seedValue + 0x7407ull);
+                throatFrom = throatFrom + throatRamp * (throatJump - throatFrom);
+                throatRamp = 0.0f;
+                throatRampStep = filterGlide < 0.005f ? 1.0f : 1.0f / (float) juce::jmax (1.0, filterGlide * step * spq);
 
                 // Hold the last place now and then, so it moves in phrases.
                 if (unit (h) < 0.65f)
                     throatJump = 2.0f * unit (hash64 (h)) - 1.0f;
             }
 
-            float octaves = filterMove * teeth * 3.0f * throatJump;
+            throatRamp = juce::jmin (1.0f, throatRamp + throatRampStep);
+            const float place = throatFrom + throatRamp * (throatJump - throatFrom);
+            float octaves = filterMove * 3.0f * place;
 
             if (inFill)
                 octaves += (throatType == ids::filterHigh ? 1.0f : -1.0f) * filterMove * 4.0f * fillProgress;
@@ -902,6 +972,8 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     throwOut.store (throwFlash, std::memory_order_relaxed);
 
     expectedPpq = base + numSamples * ppqPerSample;
+    shownBar.store ((int) (lastRawBar + 1), std::memory_order_relaxed);
+    shownPhraseBar.store ((int) (lastRawBar + barShift), std::memory_order_relaxed);
     freePpq = playing ? expectedPpq : freePpq + numSamples * ppqPerSample;
 
     // For the editor.
@@ -915,8 +987,10 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     engageOut.store (engage, std::memory_order_relaxed);
     kindOut.store ((int) player.kind(), std::memory_order_relaxed);
     barsToFillOut.store (wild ? -1 : barsToFill, std::memory_order_relaxed);
+    shownPosition.store (spanKey != std::numeric_limits<int64_t>::min() ? (float) (expectedPpq - spanStart) : -1.0f, std::memory_order_relaxed);
+    pitchDriftOut.store (classifier.pitchDrift, std::memory_order_relaxed);
 
-    const float teethShown = wild ? bite : (fillShown ? bite : lure);
+    const float teethShown = wild || fillShown ? 1.0f : lure;
     toothOut[0].store (strikeFlash, std::memory_order_relaxed);
     toothOut[1].store (shaperAmount * teethShown, std::memory_order_relaxed);
     toothOut[2].store (filterAmount * teethShown, std::memory_order_relaxed);

@@ -6,7 +6,9 @@
 // The Mimic's face: a treasure chest in a dungeon. Its lid lifts and its
 // teeth grow with Bite (wider still during a fill); Bite itself is the big
 // gold lock plate. The front page holds what a preset user touches - Bite,
-// Wild/Fill, Speed, Mix and what it chews - and ADVANCED opens the rest.
+// Wild/Fill and their settings, Speed, Mix and what it chews - and
+// ADVANCED opens a drawer below it with the rest, so the front page always
+// stays in view.
 class MimicEditor : public juce::AudioProcessorEditor,
                     public juce::Timer
 {
@@ -17,6 +19,8 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void timerCallback() override;
+
+    static constexpr int frontHeight = 620, drawerHeight = 236;
 
 private:
     struct Look : juce::LookAndFeel_V4
@@ -53,8 +57,8 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
     };
 
-    // The page behind ADVANCED: it paints its own section frames.
-    struct Advanced : juce::Component
+    // The drawer behind ADVANCED: it paints its own section frames.
+    struct Drawer : juce::Component
     {
         std::function<void (juce::Graphics&)> painter;
         void paint (juce::Graphics& g) override { if (painter) painter (g); }
@@ -65,10 +69,15 @@ private:
     void setUpSwitch (juce::Component& parent, Switch&, const char* id, const juce::String& name, bool chip);
     void refreshPresets();
     void showAdvanced (bool);
+    void updateModeControls();
+    void updateTeethNames();
     void paintChest (juce::Graphics&);
-    void paintAdvanced (juce::Graphics&);
+    void paintModePanel (juce::Graphics&);
+    void paintPattern (juce::Graphics&, juce::Rectangle<float>);
+    void paintDrawer (juce::Graphics&);
     juce::String valueText (const char* id) const;
     float value (const char* id) const;
+    bool fillMode() const;
 
     MimicProcessor& mimicProcessor;
     Look look;
@@ -82,18 +91,28 @@ private:
     juce::ComboBox presetBox;
     juce::TextButton previous { "<" }, next { ">" }, save { "SAVE" };
 
-    // Advanced page.
-    Advanced advanced;
-    Knob probability, anticipation, lure, swing, breaks, throwKnob, output,
-         cutoff, resonance, move, monoBass, slicer, shaper, filter, pitcher;
-    Pick every, length, variation, throatType, prey, material;
-    Switch replace, escalate, keep, inverts[4];
-    juce::TextButton reroll { "REROLL" };
+    // The mode panel: Wild's pattern settings or Fill's schedule.
+    Pick variation, loop, every, length, phraseStart;
+    Knob probability;
 
-    juce::Rectangle<int> infoArea, fillsArea, grooveArea, throatArea, preyArea, teethArea;
+    // The drawer.
+    Drawer drawer;
+    Knob swing, breaks, throwKnob, output, monoBass;
+    Pick throatType;
+    Knob cutoff, resonance, move, glide;
+    Knob anticipation, lure;
+    Switch replace, escalate, keep;
+    juce::TextButton reroll { "REROLL" };
+    Pick prey, material;
+    Knob slicer, shaper, filter, pitcher;
+    Switch inverts[4];
+
+    juce::Rectangle<int> chewsArea, modeArea, patternArea;
+    juce::Rectangle<int> grooveArea, throatArea, fillsArea, preyArea, preyMeter;
     juce::String presetShown;
     float lidOpen = 0.0f;       // smoothed lift, 0..1+
     float eyeGlow = 0.0f;
+    bool fillLayout = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MimicEditor)
 };

@@ -53,7 +53,8 @@ namespace mimic
                                            Kind::tape, Kind::gate, Kind::grains, Kind::slice };
     inline constexpr int numContent = 8;
 
-    enum MaterialClass { percussive, melodic, harmonic };
+    enum MaterialClass { percussive, melodic, harmonic, vocal };
+    inline constexpr int numMaterials = 4;
 
     struct Segment
     {
@@ -187,9 +188,11 @@ namespace mimic
     };
 
     //==========================================================================
-    // Is the track drums, a single line or chords / pads? Coarse, steady and
-    // cheap: transient density, how much the level sustains, and how clearly
-    // periodic the waveform is (normalised autocorrelation).
+    // Is the track drums, a single line, chords / pads or a voice? Coarse,
+    // steady and cheap: transient density, how much the level sustains, how
+    // clearly periodic the waveform is (normalised autocorrelation) and how
+    // the pitch moves. A voice glides and wobbles between the notes of the
+    // scale; an instrument sits on them.
     class Classifier
     {
     public:
@@ -199,9 +202,13 @@ namespace mimic
 
         int material() const { return current; }
         float clarity = 0.0f, sustain = 0.0f, onsetRate = 0.0f;
+        float pitchDrift = 0.0f;    // cents off the 12-TET grid, on average
+        float pitchWobble = 0.0f;   // cents of movement within notes
 
     private:
         void analyse();
+        // Pitch of a stretch of the frame: clarity 0..1 and the frequency.
+        float nsdfPitch (int from, int length, double& hz) const;
 
         int decimation = 4, decimCount = 0;
         float decimAcc = 0.0f, lp1 = 0.0f, lp2 = 0.0f, lpCoeff = 0.0f;

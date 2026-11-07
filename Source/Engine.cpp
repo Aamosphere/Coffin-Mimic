@@ -11,10 +11,11 @@ namespace mimic
 
         // How likely each content kind is for each material, in the order of
         // contentKinds: stutter, roll, reverse, scatter, tape, gate, grains, slice.
-        constexpr float contentWeights[3][numContent] {
+        constexpr float contentWeights[numMaterials][numContent] {
             { 3.0f, 3.0f, 1.0f, 2.0f, 0.8f, 2.0f, 0.8f, 3.0f },   // percussive
             { 2.5f, 1.0f, 2.0f, 1.5f, 2.0f, 1.0f, 1.5f, 2.0f },   // melodic
-            { 1.0f, 0.4f, 3.0f, 1.0f, 2.0f, 2.5f, 3.0f, 1.0f }    // harmonic
+            { 1.0f, 0.4f, 3.0f, 1.0f, 2.0f, 2.5f, 3.0f, 1.0f },   // harmonic
+            { 3.5f, 0.5f, 2.5f, 1.5f, 2.0f, 1.5f, 2.5f, 1.5f }    // voice: chops, swells, choirs
         };
 
         bool isEnabled (const GenSettings& g, Kind kind)
@@ -34,7 +35,7 @@ namespace mimic
             for (int i = 0; i < numContent; ++i)
             {
                 const auto kind = contentKinds[i];
-                float weight = (g.enabled >> i) & 1u ? contentWeights[juce::jlimit (0, 2, g.material)][i] : 0.0f;
+                float weight = (g.enabled >> i) & 1u ? contentWeights[juce::jlimit (0, numMaterials - 1, g.material)][i] : 0.0f;
 
                 if (kind == Kind::slice && ! allowSlice)
                     weight = 0.0f;
@@ -73,7 +74,7 @@ namespace mimic
         // Melodies and pads lean to longer, echo-like values.
         double pickRepeat (Rng& r, float I, int material)
         {
-            const float lean = material == percussive ? 0.6f : (material == melodic ? -0.4f : -0.8f);
+            const float lean = material == percussive ? 0.6f : (material == melodic ? -0.4f : (material == vocal ? 0.0f : -0.8f));
             // Bite moves the values only a little: mostly eighths and
             // sixteenths, whatever the Bite.
             int index = juce::jlimit (0, 6, juce::roundToInt (1.8f + lean + I * 1.6f + r.range (-0.8f, 0.8f)));
@@ -90,6 +91,12 @@ namespace mimic
         // Arpeggio shapes for melodic stutters, in semitones per repeat.
         constexpr int8_t arps[][4] {
             { 0, 12, 7, 19 }, { 0, 7, 12, 7 }, { 0, -12, 0, 12 }, { 0, 3, 7, 12 }, { 0, 5, 7, 12 }, { 12, 7, 0, -5 }
+        };
+
+        // Vocal chops: the syllable repeats, now and then an octave or a
+        // fifth away, like a chopped-up acapella.
+        constexpr int8_t chops[][4] {
+            { 0, 0, 12, 12 }, { 0, 7, 0, 12 }, { 0, 0, 0, -12 }, { 12, 7, 0, 0 }, { 0, 12, 0, 12 }
         };
 
         // Where a grid piece of the track comes from: a step of this bar
@@ -123,7 +130,24 @@ namespace mimic
                 {
                     s.repeat = juce::jmin (length, pickRepeat (r, I, m));
 
-                    if (m == melodic && I > 0.4f && r.chance (0.3f + 0.3f * I))
+                    if (m == vocal)
+                    {
+                        // A syllable chopped on eighths or sixteenths.
+                        s.repeat = juce::jmin (length, r.chance (0.35f + 0.4f * I) ? 0.25 : 0.5);
+
+                        if (r.chance (0.25f + 0.45f * I))
+                        {
+                            const auto& shape = chops[r.below ((int) std::size (chops))];
+                            std::copy (std::begin (shape), std::end (shape), s.arp.begin());
+                            s.arpLength = 4;
+                        }
+                        else if (r.chance (0.3f))
+                        {
+                            s.repeat = juce::jmin (length, r.chance (0.5f) ? 0.75 : 0.5);
+                            s.decay = r.range (0.65f, 0.85f);   // a vocal echo
+                        }
+                    }
+                    else if (m == melodic && I > 0.4f && r.chance (0.3f + 0.3f * I))
                     {
                         // Each repeat jumps to the next note of an arpeggio.
                         const auto& shape = arps[r.below ((int) std::size (arps))];
@@ -161,7 +185,8 @@ namespace mimic
                     break;
 
                 case Kind::reverse:
-                    s.repeat = (length > 0.5 && r.chance (0.3f + 0.3f * I)) ? (r.chance (0.5f) ? 0.5 : 1.0) : length;
+                    // A voice is reversed whole: a swell into the next word.
+                    s.repeat = (m != vocal && length > 0.5 && r.chance (0.3f + 0.3f * I)) ? (r.chance (0.5f) ? 0.5 : 1.0) : length;
                     s.repeat = juce::jmin (length, s.repeat);
 
                     if (r.chance (0.2f * I))
@@ -210,6 +235,15 @@ namespace mimic
                         s.repeat = 1.0;
                         s.octaveChance = 0.3f + 0.2f * I;
                     }
+                    else if (m == vocal)
+                    {
+                        // A choir: the voice frozen, with octaves around it.
+                        s.grainNote = r.chance (0.5f) ? 0.25 : 0.5;
+                        s.grainOverlap = 2.0f;
+                        s.taper = 1.0f;
+                        s.repeat = 0.25;
+                        s.octaveChance = 0.45f + 0.3f * I;
+                    }
                     else
                     {
                         s.grainNote = r.chance (0.5f) ? 0.5 : 1.0;
@@ -220,7 +254,7 @@ namespace mimic
                     }
 
                     s.density = s.grainOverlap;
-                    s.reverseChance = (m == harmonic ? 0.3f : 0.15f) * I;
+                    s.reverseChance = (m == harmonic || m == vocal ? 0.3f : 0.15f) * I;
                     break;
 
                 case Kind::slice:
@@ -363,6 +397,36 @@ namespace mimic
             addOrMerge (script, restSegment (startOf (from), endOf (from + steps) - startOf (from)));
         };
 
+        // Breaks: holes in the beat, an eighth (or a step, if longer) at a
+        // time, mostly on the offbeats. They do not depend on Bite, and
+        // their own seed leaves the rest of the script as it was.
+        std::array<uint8_t, 64> restAt {};
+
+        if (g.breaks > 0.0f)
+        {
+            Rng br (hash64 (seed, 0xb7eaull));
+            const int unit = juce::jmax (1, juce::roundToInt (0.5 / step));
+            const int offsetUnits = juce::roundToInt (g.offsetInBar / step);
+
+            for (int i = 0; i < spanSteps; ++i)
+            {
+                const int inBar = offsetUnits + i;
+
+                if (inBar % unit != 0)
+                    continue;
+
+                const bool downbeat = inBar % juce::jmax (1, juce::roundToInt (g.bar / step)) == 0;
+                const bool offbeat = (inBar / unit) % 2 == 1;
+                const float chance = g.breaks * (downbeat ? 0.08f : (offbeat ? 0.38f : 0.22f));
+
+                if (br.chance (chance))
+                {
+                    const int length = (g.breaks > 0.6f && br.chance (0.3f)) ? 2 * unit : unit;
+                    restAt[(size_t) i] = (uint8_t) juce::jmin (length, spanSteps - i);
+                }
+            }
+        }
+
         if (g.fill)
         {
             // A Break right before the downbeat: the fill ends in silence.
@@ -374,9 +438,26 @@ namespace mimic
             // Phrases that get shorter and wilder towards the end of the fill.
             while (at < spanSteps)
             {
+                if (restAt[(size_t) at] > 0 && at > 0)
+                {
+                    const int rest = juce::jmin ((int) restAt[(size_t) at], spanSteps - at);
+                    addRest (at, rest);
+                    at += rest;
+                    previous = Kind::rest;
+                    continue;
+                }
+
                 const int remaining = spanSteps - at;
                 const int longest = juce::jmax (1, juce::roundToInt (juce::jmap (I, (float) spanSteps, 2.0f)));
                 int steps = juce::jlimit (1, remaining, 1 + r.below (longest));
+
+                // A phrase stops where a Break is planned.
+                for (int j = 1; j < steps; ++j)
+                    if (restAt[(size_t) (at + j)] > 0)
+                    {
+                        steps = j;
+                        break;
+                    }
 
                 if (steps >= 3 && (steps & 1) && r.chance (0.7f))
                     --steps;
@@ -510,9 +591,27 @@ namespace mimic
         {
             const float position = (float) at / (float) spanSteps;
 
-            if (r.chance (density * (0.6f + 0.8f * position)))
+            if (restAt[(size_t) at] > 0)
             {
-                const int steps = juce::jmin (spanSteps - at, 1 + r.below (I < 0.35f ? 2 : 3));
+                const int rest = juce::jmin ((int) restAt[(size_t) at], spanSteps - at);
+                addRest (at, rest);
+                at += rest;
+                previous = Kind::rest;
+                continue;
+            }
+
+            // Every beat of the bar gets its share, a little more towards
+            // the end.
+            if (r.chance (density * (0.8f + 0.4f * position)))
+            {
+                int steps = juce::jmin (spanSteps - at, 1 + r.below (I < 0.35f ? 2 : 3));
+
+                for (int j = 1; j < steps; ++j)
+                    if (restAt[(size_t) (at + j)] > 0)
+                    {
+                        steps = j;
+                        break;
+                    }
                 const double start = startOf (at), end = endOf (at + steps);
                 const auto kind = pickKind (r, gs, false, previous, false);
 
@@ -534,7 +633,14 @@ namespace mimic
             }
 
             // One step (or one flagged piece) from the map.
-            const int length = flag[(size_t) at] != 0 ? juce::jmin (chunk[(size_t) at], spanSteps - at) : 1;
+            int length = flag[(size_t) at] != 0 ? juce::jmin (chunk[(size_t) at], spanSteps - at) : 1;
+
+            for (int j = 1; j < length; ++j)
+                if (restAt[(size_t) (at + j)] > 0)
+                {
+                    length = j;
+                    break;
+                }
             const double start = startOf (at), end = endOf (at + length);
             const double destInBar = g.offsetInBar + start;
 
@@ -736,6 +842,7 @@ namespace mimic
         onsets = 0;
         frameSamples = 0;
         clarity = sustain = onsetRate = 0.0f;
+        pitchDrift = pitchWobble = 0.0f;
         current = candidate = harmonic;
         candidateSeconds = 0.0f;
         primed = false;
@@ -767,6 +874,64 @@ namespace mimic
                 frameFill = 0;
             }
         }
+    }
+
+    float Classifier::nsdfPitch (int from, int length, double& hz) const
+    {
+        // McLeod: the first key maximum near the highest one is the period.
+        const double fsd = sampleRate / decimation;
+        const int minLag = juce::jmax (2, (int) (fsd / 1000.0));
+        const int maxLag = juce::jmin (length / 2, (int) (fsd / 70.0));
+        const float* x = frame.data() + from;
+        float values[512] {};
+        double m = 0.0;
+
+        for (int i = 0; i < length; ++i)
+            m += 2.0 * (double) x[i] * x[i];
+
+        for (int tau = 1; tau <= maxLag && tau < 512; ++tau)
+        {
+            m -= (double) x[tau - 1] * x[tau - 1] + (double) x[length - tau] * x[length - tau];
+            double r = 0.0;
+
+            for (int i = 0; i < length - tau; ++i)
+                r += (double) x[i] * x[i + tau];
+
+            values[tau] = m > 1.0e-12 ? (float) (2.0 * r / m) : 0.0f;
+        }
+
+        float best = 0.0f;
+        bool passedZero = false;
+
+        for (int tau = 1; tau <= maxLag; ++tau)
+        {
+            passedZero = passedZero || values[tau] < 0.0f;
+
+            if (passedZero && tau >= minLag)
+                best = juce::jmax (best, values[tau]);
+        }
+
+        if (best < 0.5f)
+            return best;
+
+        passedZero = false;
+
+        for (int tau = 1; tau < maxLag; ++tau)
+        {
+            passedZero = passedZero || values[tau] < 0.0f;
+
+            if (passedZero && tau >= minLag && values[tau] >= 0.9f * best
+                && values[tau] >= values[tau - 1] && values[tau] >= values[tau + 1])
+            {
+                const double a = values[tau - 1], b = values[tau], c = values[tau + 1];
+                const double d = a - 2.0 * b + c;
+                const double lag = tau + (std::abs (d) > 1.0e-12 ? 0.5 * (a - c) / d : 0.0);
+                hz = fsd / lag;
+                return best;
+            }
+        }
+
+        return best;
     }
 
     void Classifier::analyse()
@@ -809,6 +974,39 @@ namespace mimic
                     best = juce::jmax (best, nsdf);
             }
 
+            // The pitch of short stretches: how far off the scale it sits,
+            // and how much it moves while a note is held.
+            constexpr int part = 384;
+            double previousCents = 0.0;
+            bool havePrevious = false;
+            float driftSum = 0.0f, wobbleSum = 0.0f;
+            int driftCount = 0, wobbleCount = 0;
+
+            for (int from = 0; from + part <= n; from += part / 2)
+            {
+                double hz = 0.0;
+                const float c = nsdfPitch (from, part, hz);
+
+                if (c < 0.8f || hz <= 0.0)
+                {
+                    havePrevious = false;
+                    continue;
+                }
+
+                const double cents = 1200.0 * std::log2 (hz / 440.0);
+                driftSum += (float) std::abs (cents - 100.0 * std::round (cents / 100.0));
+                ++driftCount;
+
+                if (havePrevious && std::abs (cents - previousCents) < 80.0)
+                {
+                    wobbleSum += (float) std::abs (cents - previousCents);
+                    ++wobbleCount;
+                }
+
+                previousCents = cents;
+                havePrevious = true;
+            }
+
             const float frameSustain = (float) (envSum / juce::jmax (1.0e-9, peakSum));
             const float frameRate = (float) (onsets / juce::jmax (1.0e-3, seconds));
             const float a = primed ? 0.25f : 1.0f;
@@ -816,8 +1014,17 @@ namespace mimic
             sustain += a * (frameSustain - sustain);
             onsetRate += a * (frameRate - onsetRate);
 
-            const int guess = (sustain < 0.42f && onsetRate > 0.8f && clarity < 0.85f) ? percussive
-                            : (clarity > 0.72f ? melodic : harmonic);
+            // Unvoiced frames (consonants, gaps) leave the pitch features as
+            // they were.
+            if (driftCount >= 2)
+            {
+                pitchDrift += a * (driftSum / (float) driftCount - pitchDrift);
+                pitchWobble += a * ((wobbleCount > 0 ? wobbleSum / (float) wobbleCount : 0.0f) - pitchWobble);
+            }
+
+            const bool drums = sustain < 0.42f && onsetRate > 0.8f && clarity < 0.85f;
+            const bool voice = clarity > 0.45f && pitchDrift > 11.0f && pitchWobble > 6.0f;
+            const int guess = drums ? percussive : (voice ? vocal : (clarity > 0.72f ? melodic : harmonic));
 
             if (! primed)
             {

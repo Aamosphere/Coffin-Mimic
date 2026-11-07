@@ -277,6 +277,24 @@ namespace mimic
                     b.set (swing, 0.6f);
                     b.set (breaks, 0.45f);
                     b.set (seed, 1312.0f);
+                } },
+
+                // v0.5
+                { "Acapella Eater", "vocal, chopped", false, [] (Builder& b)
+                {
+                    b.wild (0.5f, 0.6f);
+                    b.only ({ useStutter, useReverse, useGrains, useTape });
+                    b.set (material, materialVoice);
+                    b.set (throwAmount, 0.35f);
+                    b.set (seed, 4.0f);
+                } },
+
+                { "Hole Puncher", "broken, breaks", false, [] (Builder& b)
+                {
+                    b.wild (0.3f, 0.6f);
+                    b.only ({ useMash, useStutter, useRoll });
+                    b.set (breaks, 0.7f);
+                    b.set (seed, 99.0f);
                 } }
             };
 

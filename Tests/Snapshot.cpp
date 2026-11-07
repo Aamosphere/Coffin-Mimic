@@ -11,6 +11,28 @@ int main (int argc, char** argv)
         processor.presets.loadFactory (juce::String (argv[2]).getIntValue());
 
     processor.prepareToPlay (48000.0, 512);
+
+    // A few bars of clicks, so the pattern display has something to show.
+    {
+        juce::AudioBuffer<float> block (4, 512);
+        juce::MidiBuffer midi;
+        juce::Random r (3);
+
+        for (int b = 0; b < 700; ++b)
+        {
+            block.clear();
+
+            for (int i = 0; i < 512; ++i)
+            {
+                const int n = b * 512 + i;
+                const float x = (n % 12000) < 2000 ? 0.5f * (r.nextFloat() * 2.0f - 1.0f) * (1.0f - (float) (n % 12000) / 2000.0f) : 0.0f;
+                block.setSample (0, i, x);
+                block.setSample (1, i, x);
+            }
+
+            processor.processBlock (block, midi);
+        }
+    }
     std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
     editor->setVisible (true);
 
@@ -18,7 +40,11 @@ int main (int argc, char** argv)
         for (int i = 0; i < 30; ++i)
             timer->timerCallback();
 
-    // A third argument opens the Advanced page.
+    // A third argument opens the Advanced drawer; "fill" also switches to Fill.
+    if (argc > 3 && juce::String (argv[3]) == "fill")
+        if (auto* p = processor.parameters.getParameter (mimic::ids::mode))
+            p->setValueNotifyingHost (1.0f);
+
     if (argc > 3)
         for (auto* child : editor->getChildren())
             if (auto* button = dynamic_cast<juce::TextButton*> (child); button != nullptr && button->getButtonText() == "ADVANCED")

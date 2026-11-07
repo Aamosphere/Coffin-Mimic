@@ -64,6 +64,18 @@ namespace mimic::ids
     inline constexpr const char* resonance    = "resonance";
     inline constexpr const char* filterMove   = "filterMove";
 
+    // v0.5: looped bars, where phrases are counted from, the Throat glide
+    inline constexpr const char* loop         = "loop";
+    inline constexpr const char* phraseStart  = "phraseStart";
+    inline constexpr const char* filterGlide  = "filterGlide";
+
+    enum Loop { loopRepeat, loopEvolve };
+    inline const juce::StringArray loopNames { "Same every pass", "New every pass" };
+
+    // Phrases (fills and pattern groups) are counted from this bar.
+    inline const juce::StringArray phraseStartNames { "Bar 1", "Bar 2", "Bar 3", "Bar 4", "Bar 5", "Bar 6", "Bar 7", "Bar 8",
+                                                      "Bar 9", "Bar 10", "Bar 11", "Bar 12", "Bar 13", "Bar 14", "Bar 15", "Bar 16" };
+
     inline const juce::StringArray variationNames { "Every bar", "Every 2 bars", "Every 4 bars", "Every 8 bars" };
     inline constexpr int variationBars[] { 1, 2, 4, 8 };
 
@@ -82,8 +94,8 @@ namespace mimic::ids
     enum Prey { preySelf, preySidechain, preyMidi };
     inline const juce::StringArray preyNames { "Self", "Sidechain", "MIDI" };
 
-    enum Material { materialAuto, materialPercussive, materialMelodic, materialHarmonic };
-    inline const juce::StringArray materialNames { "Auto", "Percussive", "Melodic", "Harmonic" };
+    enum Material { materialAuto, materialPercussive, materialMelodic, materialHarmonic, materialVoice };
+    inline const juce::StringArray materialNames { "Auto", "Percussive", "Melodic", "Harmonic", "Voice" };
 
     // The content switches, in the order of mimic::contentKinds.
     inline const char* const contentIds[] { useStutter, useRoll, useReverse, useScatter, useTape, useGate, useGrains, useMash };

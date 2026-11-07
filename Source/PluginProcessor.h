@@ -54,6 +54,20 @@ public:
     std::atomic<bool> sidechainMissing { false };
     std::atomic<bool> transportPlaying { false };
     std::atomic<float> throwOut { 0.0f };          // a hit just went into the reverb
+    std::atomic<float> pitchDriftOut { 0.0f };
+
+    // The script playing now, for the pattern display: per segment the
+    // start and length in 1/96 ppq and the kind, packed.
+    static constexpr int maxShown = 64;
+    std::array<std::atomic<uint32_t>, maxShown> shownSegments {};
+    std::atomic<int> shownCount { 0 };
+    std::atomic<float> shownSpan { 4.0f };
+    std::atomic<float> shownPosition { -1.0f };    // ppq into the span, -1 when none plays
+    std::atomic<int> shownBar { 0 };               // the bar now, 1-based
+    std::atomic<int> shownPhraseBar { 0 };         // bars since the phrases started (Phrase Start, loops)
+
+    // The editor's Advanced drawer, remembered while the plugin lives.
+    bool advancedOpen = false;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
@@ -64,6 +78,7 @@ private:
     uint64_t spanSeed (int64_t key) const;
     void startSpan (int64_t key, double start, const mimic::GenSettings&, bool keep, int64_t seedKey);
     void discontinuity();
+    void publishScript (double span);
 
     double sr = 44100.0;
     int64_t now = 0;
@@ -98,6 +113,10 @@ private:
     mimic::Svf throat;
     int64_t throatStep = std::numeric_limits<int64_t>::min();
     float throatJump = 0.0f, throatOctaves = 0.0f, throatGlide = 0.0f;
+    float throatFrom = 0.0f, throatRamp = 1.0f, throatRampStep = 1.0f;
+
+    // Cycle loops: how many bars the loop jumps have skipped back.
+    int64_t loopOffset = 0, lastRawBar = 0;
     int throatCountdown = 0;
 
     // Prey.
