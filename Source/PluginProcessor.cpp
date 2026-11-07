@@ -1,0 +1,793 @@
+#include "PluginProcessor.h"
+
+#if ! MIMIC_HEADLESS
+ #include "PluginEditor.h"
+#endif
+
+using namespace mimic;
+
+namespace
+{
+    float coeff (double seconds, double sampleRate)
+    {
+        return 1.0f - std::exp (-1.0f / (float) (seconds * sampleRate));
+    }
+
+    int64_t floorDiv (int64_t a, int64_t b)
+    {
+        return a >= 0 ? a / b : -((-a + b - 1) / b);
+    }
+
+    float unit (uint64_t h)
+    {
+        return (float) (h >> 40) * (1.0f / 16777216.0f);
+    }
+
+    // Span keys: the low two bits say what kind of span it is, so a Wild bar
+    // and a fill never share a seed by accident.
+    enum SpanTag { tagWild = 0, tagFill = 1, tagManual = 2 };
+
+    int64_t spanKeyFor (int64_t index, SpanTag tag) { return index * 4 + tag; }
+}
+
+MimicProcessor::MimicProcessor()
+    : AudioProcessor (BusesProperties()
+        .withInput  ("Input",   juce::AudioChannelSet::stereo(), true)
+        .withInput  ("PREY IN", juce::AudioChannelSet::stereo(), false)
+        .withOutput ("Output",  juce::AudioChannelSet::stereo(), true)),
+      parameters (*this, nullptr, "MIMIC_STATE", createLayout())
+{
+}
+
+juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout()
+{
+    using namespace juce;
+    AudioProcessorValueTreeState::ParameterLayout layout;
+
+    auto percent = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v * 100.0f)) + " %"; });
+    auto db = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dB"; });
+    auto hz = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return v < 1.0f ? String ("Off") : String (roundToInt (v)) + " Hz"; });
+    auto speedText = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int)
+    {
+        constexpr const char* names[] { "1/8", "1/16", "1/32", "1/64" };
+        return String (names[jlimit (0, 3, (int) (v * 3.999f))]);
+    });
+
+    auto add = [&] (const char* id, const char* name, NormalisableRange<float> range, float def, AudioParameterFloatAttributes attr)
+    {
+        layout.add (std::make_unique<AudioParameterFloat> (ParameterID { id, 1 }, name, range, def, attr));
+    };
+
+    auto toggle = [&] (const char* id, const char* name, bool def)
+    {
+        layout.add (std::make_unique<AudioParameterBool> (ParameterID { id, 1 }, name, def));
+    };
+
+    auto pick = [&] (const char* id, const char* name, const StringArray& names, int def)
+    {
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { id, 1 }, name, names, def));
+    };
+
+    pick (ids::mode, "Mode", ids::modeNames, ids::modeFill);
+    add (ids::bite, "Bite", { 0.0f, 1.0f }, 0.5f, percent);
+    add (ids::speed, "Speed", { 0.0f, 1.0f }, 0.4f, speedText);
+    add (ids::mix, "Mix", { 0.0f, 1.0f }, 1.0f, percent);
+    add (ids::output, "Output", { -24.0f, 12.0f }, 0.0f, db);
+
+    pick (ids::fillEvery, "Fill Every", ids::fillEveryNames, 2);
+    pick (ids::fillLength, "Fill Length", ids::fillLengthNames, ids::lastBeat);
+    add (ids::probability, "Probability", { 0.0f, 1.0f }, 1.0f, percent);
+    toggle (ids::replace, "Replace", true);
+    add (ids::anticipation, "Anticipation", { 0.0f, 1.0f }, 0.0f, percent);
+    toggle (ids::escalate, "Escalate", false);
+    add (ids::lure, "Lure", { 0.0f, 1.0f }, 0.0f, percent);
+    layout.add (std::make_unique<AudioParameterInt> (ParameterID { ids::seed, 1 }, "Seed", 0, 9999, 0));
+    toggle (ids::keep, "Keep", false);
+    layout.add (std::make_unique<AudioParameterInt> (ParameterID { ids::triggerNote, 1 }, "Trigger Note", 0, 127, 36,
+        AudioParameterIntAttributes().withStringFromValueFunction ([] (int v, int) { return MidiMessage::getMidiNoteName (v, true, true, 3); })));
+
+    for (int i = 0; i < numContent; ++i)
+        toggle (ids::contentIds[i], ids::contentNames[i].toRawUTF8(), true);
+
+    pick (ids::prey, "Prey", ids::preyNames, ids::preySelf);
+    pick (ids::material, "Material", ids::materialNames, ids::materialAuto);
+    add (ids::slicer, "Slicer", { 0.0f, 1.0f }, 0.5f, percent);
+    add (ids::shaper, "Shaper", { 0.0f, 1.0f }, 0.0f, percent);
+    add (ids::filter, "Filter", { 0.0f, 1.0f }, 0.25f, percent);
+    add (ids::pitcher, "Pitcher", { 0.0f, 1.0f }, 0.0f, percent);
+    toggle (ids::slicerInvert, "Slicer Invert", false);
+    toggle (ids::shaperInvert, "Shaper Invert", false);
+    toggle (ids::filterInvert, "Filter Invert", false);
+    toggle (ids::pitcherInvert, "Pitcher Invert", false);
+
+    NormalisableRange<float> bassRange (0.0f, 300.0f);
+    bassRange.setSkewForCentre (100.0f);
+    add (ids::monoBass, "Mono Bass", bassRange, 120.0f, hz);
+
+    return layout;
+}
+
+bool MimicProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    const auto out = layouts.getMainOutputChannelSet();
+
+    if (out != juce::AudioChannelSet::stereo() && out != juce::AudioChannelSet::mono())
+        return false;
+
+    if (layouts.getMainInputChannelSet() != out)
+        return false;
+
+    if (layouts.inputBuses.size() > 1)
+    {
+        const auto prey = layouts.getChannelSet (true, 1);
+
+        if (! prey.isDisabled() && prey != juce::AudioChannelSet::stereo() && prey != juce::AudioChannelSet::mono())
+            return false;
+    }
+
+    return true;
+}
+
+void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    sr = sampleRate;
+    now = 0;
+
+    history.prepare (sr, 24.0);
+    mainOnsets.reset();
+    mainDetector.prepare (sr);
+    preyDetector.prepare (sr);
+    classifier.prepare (sr);
+    player.prepare (sr, &history, &mainOnsets);
+    shifter.prepare (sr);
+    toothFilter.reset();
+    riser.reset();
+
+    preyAtt = coeff (0.001, sr);
+    preyRel = coeff (0.08, sr);
+    preyPeakRel = coeff (2.0, sr);
+    brightSmooth = coeff (0.02, sr);
+    hpCoeff = std::exp (-juce::MathConstants<float>::twoPi * 1500.0f / (float) sr);
+    riserCoeff = coeff (0.01, sr);
+    glideCoeff = coeff (0.02, sr);
+    engageStep = 1.0f / (float) (0.003 * sr);
+    rampStep = 1.0f / (float) (0.01 * sr);
+    powerCoeff = coeff (0.3, sr);
+    compSmooth = coeff (0.05, sr);
+    peakAttack = coeff (0.0002, sr);
+    peakRelease = coeff (0.15, sr);
+    dryPeak = wetPeak = 0.0f;
+
+    juce::ignoreUnused (samplesPerBlock);
+    sideLow.reset();
+    bassFrequency = -1.0f;
+
+    preyEnv = preyPeak = preyHp = preyHpX = preyBrightEnv = preyBright = 0.0f;
+    preyHigh = false;
+    midiNote = -1;
+    midiHeld = 0;
+    engage = 0.0f;
+    replaceMix = flag (ids::replace) ? 1.0f : 0.0f;
+    mixSmoothed = 1.0f;
+    dryPower = wetPower = 0.0f;
+    compGain = 1.0f;
+    riserLevel = 0.0f;
+    pitchRatio = 1.0f;
+    manualActive = false;
+    wasPlaying = false;
+    expectedPpq = -1.0;
+    freePpq = 0.0;
+    discontinuity();
+
+    setLatencySamples (0);
+}
+
+void MimicProcessor::discontinuity()
+{
+    player.beginPass (now);
+    segmentIndex = -1;
+    spanKey = std::numeric_limits<int64_t>::min();
+    fillsInRow = 0;
+    wasInFill = false;
+}
+
+uint64_t MimicProcessor::spanSeed (int64_t key) const
+{
+    return hash64 ((uint64_t) key, (uint64_t) seedValue + 0x51edull);
+}
+
+void MimicProcessor::startSpan (int64_t key, double start, const GenSettings& g, bool keep)
+{
+    spanKey = key;
+    spanStart = start;
+    segmentIndex = -1;
+
+    const auto seed = spanSeed (keep ? keptKey.load() : key);
+    generate (script, g, seed);
+
+    // Never the same fill twice in a row: compare with the span before.
+    if (! keep)
+    {
+        generate (previousScript, g, spanSeed (key - 4));
+
+        if (previousScript.signature() == script.signature())
+            generate (script, g, hash64 (seed, 77));
+    }
+
+    slicerRng = Rng (hash64 (seed, 5));
+}
+
+void MimicProcessor::reroll()
+{
+    if (auto* p = parameters.getParameter (ids::seed))
+    {
+        const int current = (int) value (ids::seed);
+        const int next = (current + 1 + juce::Random::getSystemRandom().nextInt (9998)) % 10000;
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (p->convertTo0to1 ((float) next));
+        p->endChangeGesture();
+    }
+}
+
+void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
+    juce::ScopedNoDenormals noDenormals;
+
+    auto main = getBusBuffer (buffer, true, 0);
+    const int numSamples = buffer.getNumSamples();
+    const int numCh = main.getNumChannels();
+
+    if (numCh == 0 || numSamples == 0)
+        return;
+
+    // The prey's own input, when the host gives one.
+    const float* scL = nullptr;
+    const float* scR = nullptr;
+
+    if (getBusCount (true) > 1)
+    {
+        if (auto* bus = getBus (true, 1); bus != nullptr && bus->isEnabled())
+        {
+            auto sc = getBusBuffer (buffer, true, 1);
+
+            if (sc.getNumChannels() > 0)
+            {
+                scL = sc.getReadPointer (0);
+                scR = sc.getReadPointer (juce::jmin (1, sc.getNumChannels() - 1));
+            }
+        }
+    }
+
+    // Parameters, once per block.
+    const bool wild = choice (ids::mode) == ids::modeWild;
+    const float bite = value (ids::bite);
+    const float speed = value (ids::speed);
+    const float mix = value (ids::mix);
+    // Rounded so 0 dB is exactly unity: Fill mode must pass the track bit for bit.
+    const float outDb = std::round (value (ids::output) * 100.0f) / 100.0f;
+    const float outGain = outDb == 0.0f ? 1.0f : juce::Decibels::decibelsToGain (outDb);
+    const int every = ids::fillEveryBars[juce::jlimit (0, 5, choice (ids::fillEvery))];
+    const int lengthChoice = choice (ids::fillLength);
+    const float probability = value (ids::probability);
+    const bool replace = flag (ids::replace);
+    const float anticipation = value (ids::anticipation);
+    const bool escalate = flag (ids::escalate);
+    const float lure = value (ids::lure);
+    const bool keep = flag (ids::keep);
+    const int triggerNote = (int) value (ids::triggerNote);
+    const int preySource = choice (ids::prey);
+    const int materialChoice = choice (ids::material);
+    const float slicerAmount = value (ids::slicer), shaperAmount = value (ids::shaper);
+    const float filterAmount = value (ids::filter), pitcherAmount = value (ids::pitcher);
+    const bool slicerInvert = flag (ids::slicerInvert), shaperInvert = flag (ids::shaperInvert);
+    const bool filterInvert = flag (ids::filterInvert), pitcherInvert = flag (ids::pitcherInvert);
+    const float monoBass = value (ids::monoBass);
+    seedValue = (int) value (ids::seed);
+
+    unsigned enabled = 0;
+
+    for (int i = 0; i < numContent; ++i)
+        if (flag (ids::contentIds[i]))
+            enabled |= 1u << i;
+
+    if (keep && ! keepWasOn)
+        keptKey.store (lastFillKey);
+
+    keepWasOn = keep;
+
+    const bool bassActive = monoBass >= 1.0f && numCh > 1;
+
+    if (bassActive && std::abs (monoBass - bassFrequency) > 0.01f)
+    {
+        bassFrequency = monoBass;
+        sideLow.set (monoBass, 0.7071f, sr);
+    }
+
+    sidechainMissing.store (preySource == ids::preySidechain && scL == nullptr, std::memory_order_relaxed);
+
+    // Transport. With no tempo, 120 BPM in 4/4.
+    double bpm = 120.0, hostPpq = 0.0;
+    bool playing = false;
+    int numerator = 4, denominator = 4;
+    juce::Optional<double> lastBarStart;
+
+    if (auto* playHead = getPlayHead())
+    {
+        if (auto position = playHead->getPosition())
+        {
+            if (auto b = position->getBpm())
+                bpm = *b > 1.0 ? *b : 120.0;
+
+            if (auto p = position->getPpqPosition())
+                hostPpq = *p;
+
+            if (auto sig = position->getTimeSignature())
+            {
+                numerator = juce::jmax (1, sig->numerator);
+                denominator = juce::jmax (1, sig->denominator);
+            }
+
+            lastBarStart = position->getPpqPositionOfLastBarStart();
+            playing = position->getIsPlaying();
+        }
+    }
+
+    transportPlaying.store (playing, std::memory_order_relaxed);
+
+    const double ppqPerSample = bpm / 60.0 / sr;
+    const double spq = 1.0 / ppqPerSample;
+    const double barLen = numerator * 4.0 / denominator;
+    const double beatLen = 4.0 / denominator;
+    const double step = 0.5 * std::exp2 (-(double) juce::jlimit (0, 3, (int) (speed * 3.999f)));
+    const double fillLen = juce::jmin ((double) every * barLen,
+                                       lengthChoice == ids::lastBeat ? beatLen
+                                     : lengthChoice == ids::lastHalfBar ? barLen * 0.5 : barLen);
+
+    double base;
+
+    if (playing)
+    {
+        if (! wasPlaying || std::abs (hostPpq - expectedPpq) > juce::jmax (1.0e-3, ppqPerSample * 4.0))
+            discontinuity();
+
+        base = hostPpq;
+    }
+    else
+    {
+        if (wasPlaying)
+            discontinuity();
+
+        base = freePpq;
+    }
+
+    wasPlaying = playing;
+
+    double barStart = std::floor (base / barLen) * barLen;
+
+    if (playing && lastBarStart.hasValue())
+    {
+        barStart = *lastBarStart;
+
+        while (base - barStart >= barLen) barStart += barLen;
+        while (base < barStart) barStart -= barLen;
+    }
+
+    int64_t barIndex = (int64_t) std::llround (barStart / barLen);
+    int barsToFill = -1;
+    float progressShown = 0.0f;
+    bool fillShown = false;
+
+    GenSettings g;
+    g.beat = beatLen;
+    g.bar = barLen;
+    g.step = step;
+    g.enabled = enabled;
+    g.material = materialChoice == ids::materialAuto ? classifier.material() : materialChoice - 1;
+
+    auto* left = main.getWritePointer (0);
+    auto* right = numCh > 1 ? main.getWritePointer (1) : nullptr;
+    auto midiIt = midi.cbegin();
+    bool midiStrike = false;
+
+    for (int i = 0; i < numSamples; ++i, ++now)
+    {
+        const double tl = base + i * ppqPerSample;
+
+        // MIDI: the trigger note fires a fill, every other note is prey.
+        while (midiIt != midi.cend() && (*midiIt).samplePosition <= i)
+        {
+            const auto msg = (*midiIt).getMessage();
+
+            if (msg.isNoteOn())
+            {
+                if (msg.getNoteNumber() == triggerNote)
+                {
+                    manualActive = true;
+                    manualStart = tl;
+                    ++manualCount;
+                }
+                else
+                {
+                    midiNote = msg.getNoteNumber();
+                    midiVelocity = msg.getFloatVelocity();
+                    ++midiHeld;
+                    midiStrike = true;
+                }
+            }
+            else if (msg.isNoteOff() && msg.getNoteNumber() != triggerNote)
+            {
+                midiHeld = juce::jmax (0, midiHeld - 1);
+            }
+            else if (msg.isAllNotesOff() || msg.isAllSoundOff())
+            {
+                midiHeld = 0;
+            }
+
+            ++midiIt;
+        }
+
+        while (tl - barStart >= barLen)
+        {
+            barStart += barLen;
+            ++barIndex;
+        }
+
+        const float inL = left[i];
+        const float inR = right != nullptr ? right[i] : inL;
+        history.write (now, inL, inR);
+
+        const float mono = 0.5f * (inL + inR);
+        const bool mainOnset = mainDetector.process (mono);
+
+        if (mainOnset)
+            mainOnsets.add (now - (int64_t) (0.001 * sr));
+
+        classifier.push (mono, mainOnset);
+
+        // The prey: envelope, brightness, strikes and gaps.
+        bool preyStrike = false;
+        float envN = 0.0f;
+
+        if (preySource == ids::preyMidi)
+        {
+            const float target = midiHeld > 0 ? midiVelocity : 0.0f;
+            preyEnv += (target > preyEnv ? preyAtt : preyRel) * (target - preyEnv);
+            envN = preyEnv;
+            preyBright += brightSmooth * (midiVelocity - preyBright);
+            preyStrike = midiStrike;
+            midiStrike = false;
+        }
+        else
+        {
+            float pm = mono;
+
+            if (preySource == ids::preySidechain && scL != nullptr)
+                pm = 0.5f * (scL[i] + scR[i]);
+
+            const bool onset = preySource == ids::preySelf ? mainOnset : preyDetector.process (pm);
+            preyStrike = onset;
+
+            const float a = std::abs (pm);
+            preyEnv += (a > preyEnv ? preyAtt : preyRel) * (a - preyEnv);
+            preyPeak = preyEnv > preyPeak ? preyEnv : preyPeak + preyPeakRel * (preyEnv - preyPeak);
+            envN = juce::jlimit (0.0f, 1.0f, preyEnv / juce::jmax (preyPeak, 1.0e-4f));
+
+            preyHp = hpCoeff * (preyHp + pm - preyHpX);
+            preyHpX = pm;
+            const float h = std::abs (preyHp);
+            preyBrightEnv += (h > preyBrightEnv ? preyAtt : preyRel) * (h - preyBrightEnv);
+            const float ratio = juce::jlimit (0.0f, 1.0f, 2.5f * preyBrightEnv / (preyEnv + 1.0e-6f));
+            preyBright += brightSmooth * (ratio - preyBright);
+        }
+
+        bool preyGap = false;
+
+        if (envN > 0.6f)
+            preyHigh = true;
+        else if (preyHigh && envN < 0.25f)
+        {
+            preyHigh = false;
+            preyGap = true;
+        }
+
+        // Scheduling: where are we, is a fill playing?
+        bool inFill = false, haveSpan = false;
+        float antProgress = 0.0f, fillProgress = 0.0f;
+        int64_t key = 0;
+        double sStart = 0.0, sLength = 0.0;
+
+        if (manualActive && (tl - manualStart >= fillLen || tl < manualStart))
+            manualActive = false;
+
+        if (manualActive)
+        {
+            key = spanKeyFor (manualCount, tagManual);
+            sStart = manualStart;
+            sLength = fillLen;
+            haveSpan = inFill = true;
+        }
+        else if (wild)
+        {
+            key = spanKeyFor (barIndex, tagWild);
+            sStart = barStart;
+            sLength = barLen;
+            haveSpan = true;
+        }
+        else if (playing)
+        {
+            const int64_t group = floorDiv (barIndex, every);
+            const int64_t barInGroup = barIndex - group * every;
+            const double groupEnd = barStart + (double) (every - barInGroup) * barLen;
+            const double fillStart = groupEnd - fillLen;
+            const bool allowed = keep || probability >= 0.999f
+                              || unit (hash64 ((uint64_t) group, (uint64_t) seedValue ^ 0xf111ull)) < probability;
+
+            if (allowed)
+            {
+                barsToFill = juce::jmax (0, (int) std::floor ((fillStart - tl) / barLen));
+
+                if (tl >= fillStart)
+                {
+                    key = spanKeyFor (group, tagFill);
+                    sStart = fillStart;
+                    sLength = fillLen;
+                    haveSpan = inFill = true;
+                }
+                else if (anticipation > 0.0f)
+                {
+                    const double antLength = anticipation * barLen;
+
+                    if (tl >= fillStart - antLength)
+                        antProgress = (float) ((tl - (fillStart - antLength)) / antLength);
+                }
+            }
+        }
+
+        if (inFill)
+            fillProgress = (float) juce::jlimit (0.0, 1.0, (tl - sStart) / sLength);
+
+        if (wasInFill && ! inFill)
+            ++fillsInRow;
+
+        wasInFill = inFill;
+
+        float intensity = bite;
+
+        if (inFill && escalate)
+            intensity *= 0.55f + 0.45f * (float) juce::jmin (fillsInRow, 3) / 3.0f;
+
+        if (haveSpan)
+        {
+            lastFillKey = key;
+
+            if (key != spanKey)
+            {
+                g.span = sLength;
+                g.intensity = intensity;
+                g.fill = inFill;
+                startSpan (key, sStart, g, keep);
+            }
+
+            const double pos = tl - spanStart;
+            const auto* seg = segmentIndex >= 0 ? &script.segments[(size_t) segmentIndex] : nullptr;
+
+            if (seg == nullptr || pos < seg->start - 1.0e-9 || pos >= seg->start + seg->length - 1.0e-9)
+            {
+                const int index = script.find (pos);
+
+                if (index != segmentIndex)
+                {
+                    segmentIndex = index;
+
+                    if (index >= 0)
+                    {
+                        const auto& s = script.segments[(size_t) index];
+                        player.begin (s, now, spq, (int64_t) ((s.start + s.length - pos) * spq));
+                    }
+                    else
+                    {
+                        player.beginPass (now);
+                    }
+                }
+            }
+        }
+        else if (segmentIndex != -1 || player.active())
+        {
+            player.beginPass (now);
+            segmentIndex = -1;
+            spanKey = std::numeric_limits<int64_t>::min();
+        }
+
+        // How hard the teeth bite right now.
+        const float teeth = wild ? bite : (inFill ? intensity : juce::jmax (lure, antProgress * intensity));
+
+        // Slicer: the prey's strikes (or its gaps) restart the slices.
+        if (slicerAmount > 0.0f && preySource != ids::preySelf && (slicerInvert ? preyGap : preyStrike)
+            && slicerRng.chance (slicerAmount * teeth))
+        {
+            player.strike (now, spq, step, slicerRng.next());
+            strikeFlash = 1.0f;
+        }
+
+        float wl, wr, passWeight;
+        player.render (now, inL, inR, wl, wr, passWeight);
+
+        // Replace swaps the track for the fill; Add lays the fill on top.
+        replaceMix = replace ? juce::jmin (1.0f, replaceMix + rampStep) : juce::jmax (0.0f, replaceMix - rampStep);
+        const float fxL = wl - inL * passWeight, fxR = wr - inR * passWeight;
+        float sl = replaceMix * wl + (1.0f - replaceMix) * (inL + 0.55f * fxL);
+        float sr2 = replaceMix * wr + (1.0f - replaceMix) * (inR + 0.55f * fxR);
+
+        // Shaper: the prey's envelope shapes the level.
+        if (shaperAmount > 0.0f)
+        {
+            const float a = shaperAmount * teeth;
+            const float e = shaperInvert ? 1.0f - envN : envN;
+            const float gain = 1.0f - a + a * std::pow (juce::jlimit (0.0f, 1.0f, e), 0.7f);
+            sl *= gain;
+            sr2 *= gain;
+        }
+
+        // Filter: the prey's brightness opens the low-pass.
+        if (filterAmount > 0.0f)
+        {
+            if (--filterCountdown <= 0)
+            {
+                filterCountdown = 16;
+                const float b = filterInvert ? 1.0f - preyBright : preyBright;
+                toothFilter.set (20000.0f * std::exp2 (-filterAmount * teeth * 7.5f * (1.0f - b)), 0.7071f, sr);
+            }
+
+            // Fades in as the tooth starts to bite, so a resting filter is
+            // fully transparent.
+            const float amount = juce::jlimit (0.0f, 1.0f, filterAmount * teeth * 8.0f);
+            const float fl = toothFilter.process (0, sl, 0), fr = toothFilter.process (1, sr2, 0);
+            sl += amount * (fl - sl);
+            sr2 += amount * (fr - sr2);
+        }
+
+        // Pitcher: the track follows the MIDI prey's notes (C3 = unchanged).
+        if (pitcherAmount > 0.0f && preySource == ids::preyMidi)
+        {
+            const float semis = midiNote >= 0 ? (float) (midiNote - 60) * (pitcherInvert ? -1.0f : 1.0f) : 0.0f;
+            pitchRatio += glideCoeff * (std::exp2 (juce::jlimit (-24.0f, 24.0f, semis) / 12.0f) - pitchRatio);
+            float pl = sl, pr = sr2;
+            shifter.process (pl, pr, pitchRatio);
+            const float a = pitcherAmount * juce::jmin (1.0f, 2.0f * teeth);
+            sl += a * (pl - sl);
+            sr2 += a * (pr - sr2);
+        }
+
+        // Anticipation: a high-pass that rises into the fill, then lets go.
+        if (anticipation > 0.0f || riserLevel > 1.0e-4f)
+        {
+            riserLevel += riserCoeff * (antProgress - riserLevel);
+            riser.set (20.0f * std::exp2 (riserLevel * 5.5f), 0.9f, sr);
+            sl = riser.process (0, sl, 1);
+            sr2 = riser.process (1, sr2, 1);
+        }
+
+        // Bass-safe: the side signal loses everything below the crossover,
+        // so the lows are mono. The mid is not touched at all (no phase
+        // shift), and mono material passes unchanged.
+        if (bassActive)
+        {
+            const float m = 0.5f * (sl + sr2);
+            float side = 0.5f * (sl - sr2);
+            side -= sideLow.process (0, side, 0);
+            sl = m + side;
+            sr2 = m - side;
+        }
+
+        // Level: wild settings never come out louder than the track.
+        dryPower += powerCoeff * (mono * mono - dryPower);
+        const float wetMono = 0.5f * (sl + sr2);
+        wetPower += powerCoeff * (wetMono * wetMono - wetPower);
+        const float compTarget = juce::jlimit (0.3f, wild ? 1.1f : 1.0f, std::sqrt ((dryPower + 1.0e-9f) / (wetPower + 1.0e-9f)));
+        compGain += compSmooth * (compTarget - compGain);
+        sl *= compGain;
+        sr2 *= compGain;
+
+        // Peaks too: repeats of a hit must not poke out above the track.
+        const float dryAbs = juce::jmax (std::abs (inL), std::abs (inR));
+        dryPeak = dryAbs > dryPeak ? dryAbs : dryPeak + peakRelease * (dryAbs - dryPeak);
+        const float wetAbs = juce::jmax (std::abs (sl), std::abs (sr2));
+        wetPeak = wetAbs > wetPeak ? wetPeak + peakAttack * (wetAbs - wetPeak) : wetPeak + peakRelease * (wetAbs - wetPeak);
+        const float ceiling = juce::jmax (dryPeak * 1.12f, 1.0e-4f);
+
+        if (wetPeak > ceiling)
+        {
+            const float limit = ceiling / wetPeak;
+            sl *= limit;
+            sr2 *= limit;
+        }
+
+        // How much of the output is the Mimic. In Fill mode, between fills,
+        // this is exactly 0 and the track passes untouched.
+        const bool engaged = wild || inFill || antProgress > 0.0f || lure > 0.001f;
+        engage = engaged ? juce::jmin (1.0f, engage + engageStep) : juce::jmax (0.0f, engage - engageStep);
+        mixSmoothed += 0.002f * ((wild ? mix : 1.0f) - mixSmoothed);
+
+        const float dl = inL, dr = inR;
+
+        const float k = engage * mixSmoothed;
+        left[i] = (dl * (1.0f - k) + sl * k) * outGain;
+
+        if (right != nullptr)
+            right[i] = (dr * (1.0f - k) + sr2 * k) * outGain;
+
+        if (inFill || antProgress > 0.0f)
+        {
+            fillShown = inFill;
+            progressShown = inFill ? 0.5f + 0.5f * fillProgress : 0.5f * antProgress;
+        }
+
+        strikeFlash *= 0.9995f;
+    }
+
+    expectedPpq = base + numSamples * ppqPerSample;
+    freePpq = playing ? expectedPpq : freePpq + numSamples * ppqPerSample;
+
+    // For the editor.
+    materialOut.store (classifier.material(), std::memory_order_relaxed);
+    clarityOut.store (classifier.clarity, std::memory_order_relaxed);
+    sustainOut.store (classifier.sustain, std::memory_order_relaxed);
+    onsetRateOut.store (classifier.onsetRate, std::memory_order_relaxed);
+    preyOut.store (preyPeak > 1.0e-4f ? juce::jlimit (0.0f, 1.0f, preyEnv / preyPeak) : 0.0f, std::memory_order_relaxed);
+    fillProgressOut.store (progressShown, std::memory_order_relaxed);
+    inFillOut.store (fillShown, std::memory_order_relaxed);
+    engageOut.store (engage, std::memory_order_relaxed);
+    kindOut.store ((int) player.kind(), std::memory_order_relaxed);
+    barsToFillOut.store (wild ? -1 : barsToFill, std::memory_order_relaxed);
+
+    const float teethShown = wild ? bite : (fillShown ? bite : lure);
+    toothOut[0].store (strikeFlash, std::memory_order_relaxed);
+    toothOut[1].store (shaperAmount * teethShown, std::memory_order_relaxed);
+    toothOut[2].store (filterAmount * teethShown, std::memory_order_relaxed);
+    toothOut[3].store (preySource == ids::preyMidi ? pitcherAmount * teethShown : 0.0f, std::memory_order_relaxed);
+}
+
+void MimicProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    auto state = parameters.copyState();
+    state.setProperty ("keptKey", (juce::int64) keptKey.load(), nullptr);
+
+    if (auto xml = state.createXml())
+        copyXmlToBinary (*xml, destData);
+}
+
+void MimicProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
+
+    if (xml != nullptr && xml->hasTagName (parameters.state.getType()))
+    {
+        auto state = juce::ValueTree::fromXml (*xml);
+        keptKey.store ((int64_t) (juce::int64) state.getProperty ("keptKey", 0));
+        keepWasOn = (float) state.getChildWithProperty ("id", juce::String (ids::keep)).getProperty ("value", 0.0) > 0.5f;
+        parameters.replaceState (state);
+    }
+}
+
+bool MimicProcessor::hasEditor() const
+{
+   #if MIMIC_HEADLESS
+    return false;
+   #else
+    return true;
+   #endif
+}
+
+juce::AudioProcessorEditor* MimicProcessor::createEditor()
+{
+   #if MIMIC_HEADLESS
+    return nullptr;
+   #else
+    return new MimicEditor (*this);
+   #endif
+}
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new MimicProcessor();
+}
