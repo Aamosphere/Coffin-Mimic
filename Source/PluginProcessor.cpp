@@ -49,7 +49,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
     auto hz = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return v < 1.0f ? String ("Off") : String (roundToInt (v)) + " Hz"; });
     auto speedText = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int)
     {
-        constexpr const char* names[] { "1/8", "1/16", "1/32", "1/64" };
+        constexpr const char* names[] { "1/4", "1/8", "1/16", "1/32" };
         return String (names[jlimit (0, 3, (int) (v * 3.999f))]);
     });
 
@@ -70,7 +70,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
 
     pick (ids::mode, "Mode", ids::modeNames, ids::modeFill);
     add (ids::bite, "Bite", { 0.0f, 1.0f }, 0.5f, percent);
-    add (ids::speed, "Speed", { 0.0f, 1.0f }, 0.4f, speedText);
+    add (ids::speed, "Speed", { 0.0f, 1.0f }, 0.6f, speedText);
     add (ids::mix, "Mix", { 0.0f, 1.0f }, 1.0f, percent);
     add (ids::output, "Output", { -24.0f, 12.0f }, 0.0f, db);
 
@@ -108,6 +108,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
     add (ids::swing, "Swing", { 0.0f, 1.0f }, 0.0f, swingText);
     add (ids::breaks, "Breaks", { 0.0f, 1.0f }, 0.0f, percent);
     add (ids::throwAmount, "Throw", { 0.0f, 1.0f }, 0.0f, percent);
+
+    pick (ids::variation, "Variation", ids::variationNames, 2);
+    pick (ids::filterType, "Filter Type", ids::filterTypeNames, ids::filterOff);
+    NormalisableRange<float> cutoffRange (30.0f, 18000.0f);
+    cutoffRange.setSkewForCentre (1000.0f);
+    add (ids::cutoff, "Cutoff", cutoffRange, 1200.0f,
+         AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return v < 1000.0f ? String (roundToInt (v)) + " Hz" : String (v / 1000.0f, 1) + " kHz"; }));
+    add (ids::resonance, "Resonance", { 0.0f, 1.0f }, 0.3f, percent);
+    add (ids::filterMove, "Filter Move", { 0.0f, 1.0f }, 0.5f, percent);
 
     return layout;
 }
@@ -147,6 +156,10 @@ void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     shifter.prepare (sr);
     toothFilter.reset();
     riser.reset();
+    throat.reset();
+    throatStep = std::numeric_limits<int64_t>::min();
+    throatJump = throatOctaves = 0.0f;
+    throatGlide = coeff (0.008, sr);
 
     preyAtt = coeff (0.001, sr);
     preyRel = coeff (0.08, sr);
@@ -199,6 +212,7 @@ void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 void MimicProcessor::discontinuity()
 {
     player.beginPass (now);
+    player.setValidFrom (now);
     segmentIndex = -1;
     spanKey = std::numeric_limits<int64_t>::min();
     fillsInRow = 0;
@@ -210,19 +224,20 @@ uint64_t MimicProcessor::spanSeed (int64_t key) const
     return hash64 ((uint64_t) key, (uint64_t) seedValue + 0x51edull);
 }
 
-void MimicProcessor::startSpan (int64_t key, double start, const GenSettings& g, bool keep)
+void MimicProcessor::startSpan (int64_t key, double start, const GenSettings& g, bool keep, int64_t seedKey)
 {
     spanKey = key;
     spanStart = start;
     segmentIndex = -1;
 
-    const auto seed = spanSeed (keep ? keptKey.load() : key);
+    const auto seed = spanSeed (keep ? keptKey.load() : seedKey);
     generate (script, g, seed);
 
-    // Never the same fill twice in a row: compare with the span before.
-    if (! keep)
+    // Never the same fill twice in a row: compare with the fill before.
+    // (Wild patterns repeat on purpose.)
+    if (! keep && g.fill)
     {
-        generate (previousScript, g, spanSeed (key - 4));
+        generate (previousScript, g, spanSeed (seedKey - 4));
 
         if (previousScript.signature() == script.signature())
             generate (script, g, hash64 (seed, 77));
@@ -300,6 +315,11 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const float swing = value (ids::swing);
     const float breaks = value (ids::breaks);
     const float throwAmount = value (ids::throwAmount);
+    const int variationChoice = choice (ids::variation);
+    const int throatType = choice (ids::filterType);
+    const float cutoffHz = value (ids::cutoff);
+    const float resonance = value (ids::resonance);
+    const float filterMove = value (ids::filterMove);
 
     if (throwAmount > 0.0f && std::abs (throwAmount - lastThrowDecay) > 0.01f)
     {
@@ -377,7 +397,8 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const double spq = 1.0 / ppqPerSample;
     const double barLen = numerator * 4.0 / denominator;
     const double beatLen = 4.0 / denominator;
-    const double step = 0.5 * std::exp2 (-(double) juce::jlimit (0, 3, (int) (speed * 3.999f)));
+    // The grid: 1/4, 1/8, 1/16 or 1/32.
+    const double step = std::exp2 (-(double) juce::jlimit (0, 3, (int) (speed * 3.999f)));
     const double fillLen = juce::jmin ((double) every * barLen,
                                        lengthChoice == ids::lastBeat ? beatLen
                                      : lengthChoice == ids::lastHalfBar ? barLen * 0.5 : barLen);
@@ -445,6 +466,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
                 {
                     manualActive = true;
                     manualStart = tl;
+                    manualOffset = std::fmod (juce::jmax (0.0, tl - barStart), barLen);
                     ++manualCount;
                 }
                 else
@@ -534,22 +556,30 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         // Scheduling: where are we, is a fill playing?
         bool inFill = false, haveSpan = false;
         float antProgress = 0.0f, fillProgress = 0.0f;
-        int64_t key = 0;
-        double sStart = 0.0, sLength = 0.0;
+        int64_t key = 0, seedKey = 0;
+        double sStart = 0.0, sLength = 0.0, offsetInBar = 0.0;
+        bool variationBar = false;
 
         if (manualActive && (tl - manualStart >= fillLen || tl < manualStart))
             manualActive = false;
 
         if (manualActive)
         {
-            key = spanKeyFor (manualCount, tagManual);
+            key = seedKey = spanKeyFor (manualCount, tagManual);
             sStart = manualStart;
             sLength = fillLen;
+            offsetInBar = manualOffset;
             haveSpan = inFill = true;
         }
         else if (wild)
         {
+            // A pattern holds for its group of bars; the last bar of the
+            // group is a wilder variation, like a breakbeat edit.
+            const int groupBars = ids::variationBars[juce::jlimit (0, 3, variationChoice)];
+            const int64_t group = floorDiv (barIndex, groupBars);
+            variationBar = groupBars > 1 && barIndex - group * groupBars == groupBars - 1;
             key = spanKeyFor (barIndex, tagWild);
+            seedKey = spanKeyFor (group * 2 + (variationBar ? 1 : 0), tagWild);
             sStart = barStart;
             sLength = barLen;
             haveSpan = true;
@@ -569,9 +599,10 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
                 if (tl >= fillStart)
                 {
-                    key = spanKeyFor (group, tagFill);
+                    key = seedKey = spanKeyFor (group, tagFill);
                     sStart = fillStart;
                     sLength = fillLen;
+                    offsetInBar = std::fmod (barLen - std::fmod (fillLen, barLen), barLen);
                     haveSpan = inFill = true;
                 }
                 else if (anticipation > 0.0f)
@@ -595,7 +626,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
         wasInFill = inFill;
 
-        float intensity = bite;
+        float intensity = variationBar ? juce::jmin (1.0f, bite * 1.25f + 0.1f) : bite;
 
         if (inFill && escalate)
             intensity *= 0.55f + 0.45f * (float) juce::jmin (fillsInRow, 3) / 3.0f;
@@ -609,7 +640,8 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
                 g.span = sLength;
                 g.intensity = intensity;
                 g.fill = inFill;
-                startSpan (key, sStart, g, keep);
+                g.offsetInBar = offsetInBar;
+                startSpan (key, sStart, g, keep, seedKey);
             }
 
             const double pos = tl - spanStart;
@@ -704,6 +736,49 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             const float a = pitcherAmount * juce::jmin (1.0f, 2.0f * teeth);
             sl += a * (pl - sl);
             sr2 += a * (pr - sr2);
+        }
+
+        // The Throat: a resonant filter. Move jumps the cutoff to a new
+        // place on every grid step (sample and hold in time), more as the
+        // Mimic bites; through a fill it sweeps shut (or open, high-pass).
+        if (throatType != ids::filterOff)
+        {
+            const auto stepIndex = barIndex * 4096 + (int64_t) std::floor ((tl - barStart) / step + 1.0e-6);
+
+            if (stepIndex != throatStep)
+            {
+                throatStep = stepIndex;
+                const auto h = hash64 ((uint64_t) stepIndex, (uint64_t) seedValue + 0x7407ull);
+
+                // Hold the last place now and then, so it moves in phrases.
+                if (unit (h) < 0.65f)
+                    throatJump = 2.0f * unit (hash64 (h)) - 1.0f;
+            }
+
+            float octaves = filterMove * teeth * 3.0f * throatJump;
+
+            if (inFill)
+                octaves += (throatType == ids::filterHigh ? 1.0f : -1.0f) * filterMove * 4.0f * fillProgress;
+
+            throatOctaves += throatGlide * (octaves - throatOctaves);
+
+            if (--throatCountdown <= 0)
+            {
+                throatCountdown = 8;
+                const float hzNow = juce::jlimit (30.0f, 18000.0f, cutoffHz * std::exp2 (throatOctaves));
+                throat.set (hzNow, 0.6f + resonance * resonance * 14.0f, sr);
+            }
+
+            const int type = throatType == ids::filterLow ? 0 : (throatType == ids::filterHigh ? 1 : 2);
+            sl = throat.process (0, sl, type);
+            sr2 = throat.process (1, sr2, type);
+
+            // A screaming resonance is caught softly instead of clipping.
+            if (resonance > 0.5f)
+            {
+                sl = std::tanh (sl);
+                sr2 = std::tanh (sr2);
+            }
         }
 
         // Anticipation: a high-pass that rises into the fill, then lets go.

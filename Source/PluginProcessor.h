@@ -62,7 +62,7 @@ private:
     bool flag (const char* id) const { return value (id) > 0.5f; }
 
     uint64_t spanSeed (int64_t key) const;
-    void startSpan (int64_t key, double start, const mimic::GenSettings&, bool keep);
+    void startSpan (int64_t key, double start, const mimic::GenSettings&, bool keep, int64_t seedKey);
     void discontinuity();
 
     double sr = 44100.0;
@@ -92,6 +92,13 @@ private:
     bool manualActive = false;
     double manualStart = 0.0;
     int64_t manualCount = 0;
+    double manualOffset = 0.0;
+
+    // The Throat: the filter, its stepped cutoff and the sweep.
+    mimic::Svf throat;
+    int64_t throatStep = std::numeric_limits<int64_t>::min();
+    float throatJump = 0.0f, throatOctaves = 0.0f, throatGlide = 0.0f;
+    int throatCountdown = 0;
 
     // Prey.
     float preyEnv = 0.0f, preyPeak = 0.0f, preyHp = 0.0f, preyHpX = 0.0f, preyBrightEnv = 0.0f, preyBright = 0.0f;

@@ -68,7 +68,7 @@ namespace mimic
                 {
                     b.fill (2, lastBeat, 0.3f);
                     b.only ({ useStutter, useReverse, useGate });
-                    b.set (speed, 0.4f);
+                    b.set (speed, 0.6f);
                     b.set (breaks, 0.3f);
                 } },
 
@@ -109,7 +109,7 @@ namespace mimic
                 { "Breakcore Ambush", "broken, wild, fill", true, [] (Builder& b)
                 {
                     b.fill (1, lastHalfBar, 1.0f);
-                    b.set (speed, 0.9f);
+                    b.set (speed, 0.85f);
                     b.set (escalate, 1.0f);
                     b.set (seed, 666.0f);
                 } },
@@ -135,14 +135,14 @@ namespace mimic
                 // Wild effects: the track is always being chewed.
                 { "Restless Groove", "subtle, varying", false, [] (Builder& b)
                 {
-                    b.wild (0.15f, 0.4f);
-                    b.only ({ useStutter, useGate, useScatter, useReverse });
+                    b.wild (0.15f, 0.6f);
+                    b.only ({ useMash, useStutter, useGate, useReverse });
                     b.set (swing, 0.3f);
                 } },
 
                 { "Venetian Teeth", "broken, choppy", false, [] (Builder& b)
                 {
-                    b.wild (0.95f, 0.9f);
+                    b.wild (0.95f, 0.6f);
                     b.set (filter, 0.0f);
                     b.set (seed, 1993.0f);
                 } },
@@ -155,14 +155,14 @@ namespace mimic
 
                 { "Broken Reverse", "broken, smeared", false, [] (Builder& b)
                 {
-                    b.wild (0.5f, 0.3f);
+                    b.wild (0.5f, 0.4f);
                     b.only ({ useReverse, useScatter });
                     b.set (seed, 512.0f);
                 } },
 
                 { "Pumping Prey", "pumping, sidechain", false, [] (Builder& b)
                 {
-                    b.wild (0.8f, 0.4f);
+                    b.wild (0.8f, 0.6f);
                     b.only ({});
                     b.set (prey, preySidechain);
                     b.set (shaper, 1.0f);
@@ -173,7 +173,7 @@ namespace mimic
 
                 { "Brightness Thief", "filtered, sidechain", false, [] (Builder& b)
                 {
-                    b.wild (0.8f, 0.4f);
+                    b.wild (0.8f, 0.6f);
                     b.only ({});
                     b.set (prey, preySidechain);
                     b.set (filter, 1.0f);
@@ -183,7 +183,7 @@ namespace mimic
 
                 { "Copycat Chop", "choppy, sidechain", false, [] (Builder& b)
                 {
-                    b.wild (0.7f, 0.4f);
+                    b.wild (0.7f, 0.6f);
                     b.only ({ useStutter });
                     b.set (prey, preySidechain);
                     b.set (slicer, 1.0f);
@@ -192,7 +192,7 @@ namespace mimic
 
                 { "Puppet Strings", "pitched, midi", false, [] (Builder& b)
                 {
-                    b.wild (0.6f, 0.4f);
+                    b.wild (0.6f, 0.6f);
                     b.only ({ useStutter });
                     b.set (prey, preyMidi);
                     b.set (pitcher, 1.0f);
@@ -218,9 +218,51 @@ namespace mimic
                     b.set (seed, 12.0f);
                 } },
 
+                // v0.3: the beat masher and the throat
+                { "Amen Masher", "breakbeat, mashed", false, [] (Builder& b)
+                {
+                    b.wild (0.55f, 0.6f);
+                    b.only ({ useMash, useStutter, useRoll, useReverse });
+                    b.set (variation, 2.0f);
+                    b.set (breaks, 0.25f);
+                    b.set (seed, 1969.0f);
+                } },
+
+                { "Ratchet Saint", "breakbeat, wild, idm", false, [] (Builder& b)
+                {
+                    b.wild (1.0f, 0.6f);
+                    b.only ({ useMash, useStutter, useRoll, useReverse, useGate });
+                    b.set (variation, 1.0f);
+                    b.set (breaks, 0.5f);
+                    b.set (throwAmount, 0.3f);
+                    b.set (seed, 2002.0f);
+                } },
+
+                { "Night Throat", "filtered, moving", false, [] (Builder& b)
+                {
+                    b.wild (0.35f, 0.6f);
+                    b.only ({ useMash, useStutter });
+                    b.set (filterType, filterLow);
+                    b.set (cutoff, 900.0f);
+                    b.set (resonance, 0.55f);
+                    b.set (filterMove, 0.8f);
+                    b.set (seed, 31.0f);
+                } },
+
+                { "Throat Sweep", "filtered, rising, fill", true, [] (Builder& b)
+                {
+                    b.fill (2, lastHalfBar, 0.6f);
+                    b.only ({ useMash, useStutter, useRoll });
+                    b.set (filterType, filterHigh);
+                    b.set (cutoff, 200.0f);
+                    b.set (resonance, 0.45f);
+                    b.set (filterMove, 0.9f);
+                    b.set (seed, 77.0f);
+                } },
+
                 { "Swung Ambush", "swung, broken", false, [] (Builder& b)
                 {
-                    b.wild (0.5f, 0.45f);
+                    b.wild (0.5f, 0.6f);
                     b.only ({ useStutter, useScatter, useGate, useRoll });
                     b.set (swing, 0.6f);
                     b.set (breaks, 0.45f);

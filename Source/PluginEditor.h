@@ -58,14 +58,14 @@ private:
     MimicProcessor& mimicProcessor;
     Look look;
 
-    Knob bite, speed, mix, output, probability, anticipation, lure, slicer, shaper, filter, pitcher, monoBass, swing, breaks, throwKnob;
-    Pick mode, every, length, prey, material;
+    Knob bite, speed, mix, output, probability, anticipation, lure, slicer, shaper, filter, pitcher, monoBass, swing, breaks, throwKnob, cutoff, resonance, move;
+    Pick mode, every, length, prey, material, variation, throatType;
     Switch replace, escalate, keep, contents[mimic::numContent], inverts[4];
 
     juce::ComboBox presetBox;
     juce::TextButton previous { "<" }, next { ">" }, save { "SAVE" }, reroll { "REROLL" };
 
-    juce::Rectangle<int> huntArea, fillArea, contentArea, preyArea, teethArea, statusArea, timelineArea;
+    juce::Rectangle<int> huntArea, fillArea, contentArea, throatArea, preyArea, teethArea, statusArea, timelineArea;
     juce::String presetShown;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MimicEditor)

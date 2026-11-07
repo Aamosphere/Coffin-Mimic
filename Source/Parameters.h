@@ -56,6 +56,20 @@ namespace mimic::ids
     inline constexpr const char* breaks       = "breaks";
     inline constexpr const char* throwAmount  = "throw";
 
+    // v0.3: the beat masher, pattern length and the filter
+    inline constexpr const char* useMash      = "useMash";
+    inline constexpr const char* variation    = "variation";
+    inline constexpr const char* filterType   = "filterType";
+    inline constexpr const char* cutoff       = "cutoff";
+    inline constexpr const char* resonance    = "resonance";
+    inline constexpr const char* filterMove   = "filterMove";
+
+    inline const juce::StringArray variationNames { "Every bar", "Every 2 bars", "Every 4 bars", "Every 8 bars" };
+    inline constexpr int variationBars[] { 1, 2, 4, 8 };
+
+    enum FilterType { filterOff, filterLow, filterBand, filterHigh };
+    inline const juce::StringArray filterTypeNames { "Off", "Low-pass", "Band-pass", "High-pass" };
+
     enum Mode { modeWild, modeFill };
     inline const juce::StringArray modeNames { "Wild", "Fill" };
 
@@ -71,7 +85,7 @@ namespace mimic::ids
     enum Material { materialAuto, materialPercussive, materialMelodic, materialHarmonic };
     inline const juce::StringArray materialNames { "Auto", "Percussive", "Melodic", "Harmonic" };
 
-    // The content switches, in the order of mimic::Kind (after pass).
-    inline const char* const contentIds[] { useStutter, useRoll, useReverse, useScatter, useTape, useGate, useGrains };
-    inline const juce::StringArray contentNames { "Stutter", "Roll", "Reverse", "Scatter", "Tape", "Gate", "Grains" };
+    // The content switches, in the order of mimic::contentKinds.
+    inline const char* const contentIds[] { useStutter, useRoll, useReverse, useScatter, useTape, useGate, useGrains, useMash };
+    inline const juce::StringArray contentNames { "Stutter", "Roll", "Reverse", "Scatter", "Tape", "Gate", "Grains", "Mash" };
 }

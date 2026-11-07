@@ -44,8 +44,14 @@ namespace mimic
     //==========================================================================
     // A fill (or a bar of Wild mode) is a script of segments laid out in
     // quarter notes. The script is pure data, generated from a seed.
-    enum class Kind : uint8_t { pass, stutter, roll, reverse, scatter, tape, gate, grains, rest };
-    inline constexpr int numContent = 7;   // the switchable kinds after pass (rest is a Break)
+    // slice: a grid piece of the track taken from another place (the beat
+    // masher). rest: a Break (silence).
+    enum class Kind : uint8_t { pass, stutter, roll, reverse, scatter, tape, gate, grains, rest, slice };
+
+    // The switchable kinds, in the order of the content switches.
+    inline constexpr Kind contentKinds[] { Kind::stutter, Kind::roll, Kind::reverse, Kind::scatter,
+                                           Kind::tape, Kind::gate, Kind::grains, Kind::slice };
+    inline constexpr int numContent = 8;
 
     enum MaterialClass { percussive, melodic, harmonic };
 
@@ -65,7 +71,12 @@ namespace mimic
         float density = 1.0f;               // gate and grains
         float reverseChance = 0.0f, octaveChance = 0.0f;
         float swing = 0.0f;                 // 0..0.5: odd repeats start late
-        float grainMin = 0.035f, grainMax = 0.135f;   // grain length range, seconds
+        double back = 0.0;                  // slice: how far behind the segment start its source starts (ppq)
+        double minRepeat = 0.125;           // roll: shortest repeat (ppq)
+        double grainNote = 0.25;            // grains: spawn grid and length unit (ppq)
+        float grainOverlap = 1.0f;          // grain length in grain notes
+        float taper = 1.0f;                 // grain window: 0.1 = punchy, 1 = Hann
+        bool punch = false;                 // short repeats are articulated like hits
         std::array<int8_t, 4> arp {};       // semitones per repeat (melodic stutters)
         int arpLength = 0;
         uint32_t seed = 0;
@@ -108,6 +119,7 @@ namespace mimic
         bool fill = true;           // a fill builds to a climax; Wild varies a bar
         float swing = 0.0f;         // 0..0.5 of a step
         float breaks = 0.0f;        // 0..1, how often a rest follows an event
+        double offsetInBar = 0.0;   // where the span starts in its bar (ppq)
     };
 
     void generate (Script&, const GenSettings&, uint64_t seed);
@@ -166,6 +178,9 @@ namespace mimic
         // target itself when there is none.
         double snap (double target, double window, double preroll, bool* found = nullptr) const;
 
+        // An onset within tolerance of position, not later than limit.
+        bool near (double position, double tolerance, double limit, double& onset) const;
+
     private:
         std::array<int64_t, 256> times {};
         int count = 0, write = 0;
@@ -220,7 +235,7 @@ namespace mimic
             a3 = g * a2;
         }
 
-        // 0 = low-pass, 1 = high-pass
+        // 0 = low-pass, 1 = high-pass, 2 = band-pass (unity at the peak)
         float process (int ch, float x, int type)
         {
             const float v3 = x - ic2[ch];
@@ -228,7 +243,7 @@ namespace mimic
             const float v2 = ic2[ch] + a2 * ic1[ch] + a3 * v3;
             ic1[ch] = 2.0f * v1 - ic1[ch];
             ic2[ch] = 2.0f * v2 - ic2[ch];
-            return type == 0 ? v2 : x - k * v1 - v2;
+            return type == 0 ? v2 : (type == 1 ? x - k * v1 - v2 : k * v1);
         }
     };
 
@@ -250,6 +265,10 @@ namespace mimic
         // Slicer tooth: the prey struck. Restart the current slice, or, when
         // nothing is happening, replay the last hit of the main track.
         void strike (int64_t now, double samplesPerPpq, double stepPpq, uint32_t seed);
+
+        // Audio before this sample is from another place in the song (the
+        // playhead jumped): nothing is taken from it.
+        void setValidFrom (int64_t sample) { validFrom = sample; }
 
         Kind kind() const { return current.kind; }
         bool active() const { return current.kind != Kind::pass; }
@@ -301,6 +320,7 @@ namespace mimic
         void spawnGrain (Voice&, int64_t now, float p);
 
         double sr = 44100.0;
+        int64_t validFrom = 0;
         const History* history = nullptr;
         const OnsetList* onsets = nullptr;
         Voice current;

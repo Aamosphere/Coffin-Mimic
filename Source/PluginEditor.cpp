@@ -96,12 +96,17 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     setUpKnob (swing, ids::swing, "SWING");
     setUpKnob (breaks, ids::breaks, "BREAKS");
     setUpKnob (throwKnob, ids::throwAmount, "THROW");
+    setUpKnob (cutoff, ids::cutoff, "CUTOFF");
+    setUpKnob (resonance, ids::resonance, "RESO");
+    setUpKnob (move, ids::filterMove, "MOVE");
 
     setUpPick (mode, ids::mode, "MODE");
     setUpPick (every, ids::fillEvery, "EVERY");
     setUpPick (length, ids::fillLength, "WHERE");
     setUpPick (prey, ids::prey, "PREY");
     setUpPick (material, ids::material, "MATERIAL");
+    setUpPick (variation, ids::variation, "NEW PATTERN");
+    setUpPick (throatType, ids::filterType, "TYPE");
 
     setUpSwitch (replace, ids::replace, "Replace");
     setUpSwitch (escalate, ids::escalate, "Escalate");
@@ -152,7 +157,7 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     };
 
     refreshPresets();
-    setSize (900, 716);
+    setSize (900, 836);
     startTimerHz (30);
 }
 
@@ -229,6 +234,7 @@ void MimicEditor::updateVisibility()
         c->setEnabled (fillMode);
 
     mix.slider.setEnabled (! fillMode);
+    variation.box.setEnabled (! fillMode);
     bite.label.setText (fillMode ? "BITE (PEAK)" : "BITE", juce::dontSendNotification);
 }
 
@@ -282,6 +288,7 @@ void MimicEditor::paint (juce::Graphics& g)
     drawPanel (huntArea, "THE HUNT");
     drawPanel (fillArea, "FILLS");
     drawPanel (contentArea, "WHAT IT CHEWS");
+    drawPanel (throatArea, "THE THROAT");
     drawPanel (preyArea, "THE PREY");
     drawPanel (teethArea, "TEETH");
     drawPanel (statusArea, "");
@@ -314,6 +321,8 @@ void MimicEditor::paint (juce::Graphics& g)
 
     g.setColour (dim);
     g.setFont (juce::Font (juce::FontOptions (look.typewriter).withHeight (11.5f)));
+    g.drawFittedText ("a resonant filter. Move jumps the cutoff in time with the grid\nand sweeps it through a fill. Bite sets how far it jumps.",
+                      throatArea.getX() + 470, throatArea.getY() + 40, 380, 34, juce::Justification::centredLeft, 2);
     g.drawFittedText ("the prey is what the Mimic listens to.\nSelf = its own track.", preyArea.getX() + 14, preyArea.getBottom() - 38, preyArea.getWidth() - 24, 32, juce::Justification::centredLeft, 2);
 
     // Status line and the timeline to the next fill.
@@ -353,9 +362,10 @@ void MimicEditor::resized()
     huntArea    = { 16, 80, 420, 262 };
     fillArea    = { 446, 80, 438, 262 };
     contentArea = { 16, 352, 868, 64 };
-    preyArea    = { 16, 426, 300, 214 };
-    teethArea   = { 326, 426, 558, 214 };
-    statusArea  = { 16, 650, 868, 56 };
+    throatArea  = { 16, 426, 868, 110 };
+    preyArea    = { 16, 546, 300, 214 };
+    teethArea   = { 326, 546, 558, 214 };
+    statusArea  = { 16, 770, 868, 56 };
 
     presetBox.setBounds (520, 22, 260, 28);
     previous.setBounds (488, 22, 28, 28);
@@ -394,18 +404,25 @@ void MimicEditor::resized()
     reroll.setBounds (796, 228, 80, 26);
 
     for (int i = 0; i < numContent; ++i)
-        contents[i].button.setBounds (30 + i * 120, 384, 116, 24);
+        contents[i].button.setBounds (30 + i * 106, 384, 104, 24);
 
-    placePick (prey, 30, 460, 130);
-    placePick (material, 170, 460, 130);
-    placeKnob (monoBass, 40, 512, 56);
+    placePick (variation, 30, 270, 120);
+
+    placePick (throatType, 30, 462, 130);
+    placeKnob (cutoff, 190, 452, 56);
+    placeKnob (resonance, 280, 452, 56);
+    placeKnob (move, 370, 452, 56);
+
+    placePick (prey, 30, 580, 130);
+    placePick (material, 170, 580, 130);
+    placeKnob (monoBass, 40, 632, 56);
 
     Knob* teeth[] { &slicer, &shaper, &filter, &pitcher };
 
     for (int i = 0; i < 4; ++i)
     {
         const int x = 360 + i * 132;
-        placeKnob (*teeth[i], x, 470, 66);
-        inverts[i].button.setBounds (x - 4, 574, 80, 22);
+        placeKnob (*teeth[i], x, 590, 66);
+        inverts[i].button.setBounds (x - 4, 694, 80, 22);
     }
 }
