@@ -411,9 +411,11 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     keep.button.setTooltip ("Lock the current variation: it repeats exactly.");
 
     setUpPick (drawer, prey, ids::prey, "LISTENS TO");
-    setUpPick (drawer, material, ids::material, "MATERIAL");
+    // What the track this Mimic sits on is: on the front page, as it
+    // decides what the Mimic does (the prey has nothing to do with it).
+    setUpPick (stage, material, ids::material, "YOUR TRACK IS");
     prey.box.setTooltip ("What the teeth listen to. Self: the track itself. Sidechain: another track routed to PREY IN. MIDI: the notes you play.");
-    material.box.setTooltip ("What the Mimic thinks the track is. Auto listens; the footer shows what it hears.");
+    material.box.setTooltip ("What the track this Mimic is on is: drums, a melody, chords and pads, or a voice. Auto listens to the track and decides; each gets its own versions of the effects (shards and bends on a melody, fog on pads...).");
 
     Knob* teeth[] { &slicer, &shaper, &filter, &pitcher, &voiceTooth, &possess };
     const char* teethIds[] { ids::slicer, ids::shaper, ids::filter, ids::pitcher, ids::voice, ids::possess };
@@ -900,6 +902,17 @@ void MimicEditor::paintFront (juce::Graphics& g)
 
     paintChest (g);
 
+    // Beside the track picker: what Auto hears right now.
+    {
+        const int setTo = juce::roundToInt (value (ids::material));
+        const int heard = juce::jlimit (0, 3, mimicProcessor.materialOut.load());
+        g.setFont (font (look.typewriter, 12.0f));
+        g.setColour (dim);
+        g.drawText (setTo == ids::materialAuto ? "hears:" : "auto would hear:", 186, 102, 120, 14, juce::Justification::centredLeft);
+        g.setColour (setTo == ids::materialAuto ? goldLight : dim);
+        g.drawText (materialNames[heard], 186, 114, 160, 16, juce::Justification::centredLeft);
+    }
+
     // BITE value under the lock plate.
     g.setColour (goldLight);
     g.setFont (font (look.bangers, 34.0f));
@@ -1100,8 +1113,9 @@ void MimicEditor::resized()
     keep.button.setBounds (432, 172, 150, 22);
     reroll.setBounds (432, 196, 150, 26);
 
-    placePick (prey, 610, 36, 184);
-    placePick (material, 802, 36, 188);
+    placePick (prey, 610, 36, 380);
+    placePick (material, 26, 84, 150);
+
     preyMeter = { 610, 104, 380, 6 };
 
     Knob* teeth[] { &slicer, &shaper, &filter, &pitcher, &voiceTooth, &possess };
