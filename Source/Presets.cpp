@@ -295,6 +295,41 @@ namespace mimic
                     b.only ({ useMash, useStutter, useRoll });
                     b.set (breaks, 0.7f);
                     b.set (seed, 99.0f);
+                } },
+
+                // v0.6 teeth. The track speaks with the voice at PREY IN.
+                { "Ventriloquist", "vocoder, sidechain", false, [] (Builder& b)
+                {
+                    b.wild (0.15f, 0.6f);
+                    b.set (prey, preySidechain);
+                    b.set (voice, 0.85f);
+                } },
+
+                // The track steps aside, band by band, wherever the prey sings.
+                { "Carved Out", "ducking, sidechain", false, [] (Builder& b)
+                {
+                    b.wild (0.1f, 0.6f);
+                    b.set (prey, preySidechain);
+                    b.set (voice, 1.0f);
+                    b.set (voiceInvert, 1.0f);
+                } },
+
+                // The track's own hits set the Mimic off.
+                { "Possessed", "possessed, wild", false, [] (Builder& b)
+                {
+                    b.wild (0.1f, 0.6f);
+                    b.only ({ useMash, useStutter, useRoll, useReverse, useTape });
+                    b.set (possess, 0.6f);
+                    b.set (seed, 13.0f);
+                } },
+
+                // No pattern at all: every MIDI note fires an event.
+                { "Puppet Master", "possessed, midi", false, [] (Builder& b)
+                {
+                    b.wild (0.0f, 0.6f);
+                    b.only ({ useStutter, useRoll, useReverse, useTape, useGrains });
+                    b.set (prey, preyMidi);
+                    b.set (possess, 1.0f);
                 } }
             };
 

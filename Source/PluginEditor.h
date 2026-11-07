@@ -104,8 +104,9 @@ private:
     Switch replace, escalate, keep;
     juce::TextButton reroll { "REROLL" };
     Pick prey, material;
-    Knob slicer, shaper, filter, pitcher;
-    Switch inverts[4];
+    static constexpr int numTeeth = 6;
+    Knob slicer, shaper, filter, pitcher, voiceTooth, possess;
+    Switch inverts[numTeeth];
 
     juce::Rectangle<int> chewsArea, modeArea, patternArea;
     juce::Rectangle<int> grooveArea, throatArea, fillsArea, preyArea, preyMeter;

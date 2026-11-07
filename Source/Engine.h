@@ -125,6 +125,10 @@ namespace mimic
 
     void generate (Script&, const GenSettings&, uint64_t seed);
 
+    // Possess tooth: one event of an enabled kind, starting at span position
+    // 0 and lasting length ppq, for the prey to fire at once.
+    Segment makeEvent (const GenSettings&, double length, uint64_t seed);
+
     //==========================================================================
     // The rolling buffer of what the main track just played.
     class History
@@ -332,6 +336,27 @@ namespace mimic
         const OnsetList* onsets = nullptr;
         Voice current;
         std::array<Voice, 3> tails;
+    };
+
+    //==========================================================================
+    // Voice tooth: a channel vocoder. The prey (modulator) lends its
+    // spectrum to the track (carrier), band by band. Carve does the
+    // opposite: each band of the track ducks where the prey is loud.
+    class Vocoder
+    {
+    public:
+        static constexpr int numBands = 20;
+
+        void prepare (double sampleRate);
+        void reset();
+        // l, r: the track in, the vocoded track out. prey: mono modulator.
+        void process (float& l, float& r, float prey, bool carve);
+
+    private:
+        Svf mod[numBands], car[numBands];
+        float modEnv[numBands] {}, carEnv[numBands] {}, duckEnv[numBands] {};
+        float modAtt = 0.0f, modRel = 0.0f, carAtt = 0.0f, carRel = 0.0f, peakRel = 0.0f, duckAtt = 0.0f, duckRel = 0.0f;
+        float totalPeak = 0.0f;
     };
 
     //==========================================================================

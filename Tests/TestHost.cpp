@@ -436,6 +436,146 @@ int main (int argc, char** argv)
         std::printf ("phrase start bar 3            %s first fill at ppq %.2f (want 23)\n", good ? "ok  " : "FAIL", r.firstFillPpq);
     }
 
+    // Possess: at Bite 0 nothing happens on its own, but the track's own
+    // hits fire events - deterministically.
+    {
+        auto setup = [] (float amount)
+        {
+            return [amount] (MimicProcessor& p)
+            {
+                setParam (p, mimic::ids::bite, 0.0f);
+                setParam (p, mimic::ids::possess, amount);
+            };
+        };
+
+        auto off = render (drumLoop, setup (0.0f));
+        auto on = render (drumLoop, setup (1.0f)), again = render (drumLoop, setup (1.0f));
+        const unsigned events = ~(1u << (int) mimic::Kind::pass);
+        float diff = 0.0f;
+
+        for (int i = 0; i < on.out.getNumSamples(); ++i)
+            diff = juce::jmax (diff, std::abs (on.out.getSample (0, i) - again.out.getSample (0, i)));
+
+        const bool good = (off.kindsSeen & events) == 0 && (on.kindsSeen & events) != 0 && diff == 0.0f
+                       && on.finite && on.peak < 2.0f;
+        ok = ok && good;
+        std::printf ("possess 0 / 100 %%, bite 0      %s events 0x%03x / 0x%03x, jump x%.1f, rerender diff %g\n",
+                     good ? "ok  " : "FAIL", off.kindsSeen & events, on.kindsSeen & events, on.maxJump, diff);
+        writeWav (folder.getChildFile ("possess 100 - drums.wav"), on.out);
+    }
+
+    // Voice: drums at the main input, the singer at PREY IN. Vocoded, the
+    // drums' level follows the singer; carved, it dips where she sings.
+    {
+        // The level of the voice's band, 300 Hz - 3 kHz, every 10 ms.
+        auto envelope = [] (const juce::AudioBuffer<float>& b)
+        {
+            std::vector<float> e;
+            const int hop = (int) (0.01 * sampleRate);
+            mimic::Svf hp1, hp2, lp1, lp2;
+            hp1.set (300.0f, 0.7071f, sampleRate);
+            hp2.set (300.0f, 0.7071f, sampleRate);
+            lp1.set (3000.0f, 0.7071f, sampleRate);
+            lp2.set (3000.0f, 0.7071f, sampleRate);
+
+            for (int i = 0; i + hop <= b.getNumSamples(); i += hop)
+            {
+                double sum = 0.0;
+                for (int n = 0; n < hop; ++n)
+                {
+                    const float x = lp2.process (0, lp1.process (0, hp2.process (0, hp1.process (0, b.getSample (0, i + n), 1), 1), 0), 0);
+                    sum += x * x;
+                }
+                e.push_back ((float) std::sqrt (sum / hop));
+            }
+
+            return e;
+        };
+
+        auto correlation = [] (const std::vector<float>& a, const std::vector<float>& b)
+        {
+            const size_t n = std::min (a.size(), b.size());
+            double ma = 0, mb = 0;
+            for (size_t i = 0; i < n; ++i) { ma += a[i]; mb += b[i]; }
+            ma /= (double) n; mb /= (double) n;
+            double sab = 0, saa = 0, sbb = 0;
+            for (size_t i = 0; i < n; ++i)
+            {
+                sab += (a[i] - ma) * (b[i] - mb);
+                saa += (a[i] - ma) * (a[i] - ma);
+                sbb += (b[i] - mb) * (b[i] - mb);
+            }
+            return (float) (sab / std::sqrt (saa * sbb + 1.0e-20));
+        };
+
+        // The singer sings a beat, then rests a beat.
+        auto phrased = singer;
+        const double beat = sampleRate * 60.0 / bpm;
+
+        for (int i = 0; i < phrased.getNumSamples(); ++i)
+        {
+            const double t = std::fmod ((double) i, 2.0 * beat) / beat;
+            const float gate = (float) juce::jlimit (0.0, 1.0, std::min (t * 50.0, (1.0 - t) * 50.0));
+            for (int ch = 0; ch < 2; ++ch)
+                phrased.setSample (ch, i, phrased.getSample (ch, i) * gate);
+        }
+
+        const auto preyEnv = envelope (phrased);
+        const float dry = correlation (envelope (drumLoop), preyEnv);
+
+        // Carve is measured on a noise bed: it fills every band, so a hole
+        // shows (the drums' kick leaks into any band filter).
+        juce::AudioBuffer<float> bed (2, drumLoop.getNumSamples());
+        {
+            juce::Random r (11);
+            for (int i = 0; i < bed.getNumSamples(); ++i)
+            {
+                const float x = 0.2f * noise (r);
+                bed.setSample (0, i, x);
+                bed.setSample (1, i, x);
+            }
+        }
+
+        for (int carve = 0; carve < 2; ++carve)
+        {
+            const auto& track = carve ? bed : drumLoop;
+            auto r = render (track, [carve] (MimicProcessor& p)
+            {
+                setParam (p, mimic::ids::bite, 0.0f);
+                setParam (p, mimic::ids::prey, mimic::ids::preySidechain);
+                setParam (p, mimic::ids::voice, 1.0f);
+                setParam (p, mimic::ids::voiceInvert, (float) carve);
+            }, &phrased);
+
+            // How much the voice band of the drums gains (in dB, against the
+            // dry drums) while the singer is loud, compared with while she
+            // is quiet: up when vocoded, down when carved.
+            const auto outEnv = envelope (r.out), dryEnv = envelope (track);
+            auto sorted = preyEnv;
+            std::sort (sorted.begin(), sorted.end());
+            const float quiet = sorted[sorted.size() * 3 / 10], loud = sorted[sorted.size() * 7 / 10];
+            double outLoud = 1.0e-12, dryLoud = 1.0e-12, outQuiet = 1.0e-12, dryQuiet = 1.0e-12;
+
+            for (size_t i = 0; i < std::min (outEnv.size(), preyEnv.size()); ++i)
+            {
+                if (preyEnv[i] >= loud)  { outLoud += outEnv[i] * outEnv[i]; dryLoud += dryEnv[i] * dryEnv[i]; }
+                if (preyEnv[i] <= quiet) { outQuiet += outEnv[i] * outEnv[i]; dryQuiet += dryEnv[i] * dryEnv[i]; }
+            }
+
+            if (std::getenv ("MIMIC_DEBUG") != nullptr)
+                std::printf ("   loud: out/dry %.1f dB, quiet: out/dry %.1f dB (thresholds %.4f / %.4f)\n",
+                             10.0 * std::log10 (outLoud / dryLoud), 10.0 * std::log10 (outQuiet / dryQuiet), quiet, loud);
+
+            const float contrast = (float) (10.0 * std::log10 ((outLoud / dryLoud) / (outQuiet / dryQuiet)));
+            const float c = correlation (outEnv, preyEnv);
+            const bool good = r.finite && r.peak < 2.0f && (carve ? contrast < -6.0f : contrast > 10.0f);
+            ok = ok && good;
+            std::printf ("voice 100 %%, %-6s             %s singing vs quiet %+.1f dB, envelope corr %.2f (dry %.2f), peak %.2f, jump x%.1f\n",
+                         carve ? "carve" : "vocode", good ? "ok  " : "FAIL", contrast, c, dry, r.peak, r.maxJump);
+            writeWav (folder.getChildFile (juce::String ("voice 100 ") + (carve ? "carve - noise" : "vocode - drums") + " with singer.wav"), r.out);
+        }
+    }
+
     // Every factory preset on the drum loop, the melody and the pad.
     const auto& factory = mimic::PresetManager::getFactory();
 
@@ -457,7 +597,10 @@ int main (int argc, char** argv)
         for (auto [suffix, buffer] : { std::pair<const char*, const juce::AudioBuffer<float>*> { "drums", &drumLoop },
                                        { "melody", &lead }, { "pad", &chords }, { "voice", &singer } })
         {
-            const juce::AudioBuffer<float>* prey = factory[i].tags.contains ("sidechain") ? (buffer == &drumLoop ? &lead : &drumLoop) : nullptr;
+            const bool sung = factory[i].tags.contains ("vocoder") || factory[i].tags.contains ("ducking");
+            const juce::AudioBuffer<float>* prey = ! factory[i].tags.contains ("sidechain") ? nullptr
+                                                 : sung ? (buffer == &singer ? &lead : &singer)
+                                                        : (buffer == &drumLoop ? &lead : &drumLoop);
             auto r = render (*buffer, [i] (MimicProcessor& p) { p.presets.loadFactory (i); }, prey, midiPrey ? &notes : nullptr);
             // Echo presets let the reverb tail ring on after a fill.
             report (factory[i].name + " / " + suffix, r, factory[i].fill && ! factory[i].tags.contains ("echo"));

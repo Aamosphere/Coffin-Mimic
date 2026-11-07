@@ -37,14 +37,17 @@ namespace
     const char* const materialNames[] { "PERCUSSIVE", "MELODIC", "HARMONIC", "VOICE" };
 
     // The teeth by what they do; flipped, they do the opposite.
-    const char* const toothNames[] { "CHOP", "FOLLOW", "BRIGHT", "PITCH" };
-    const char* const flippedNames[] { "GAPS", "DUCK", "DARK", "MIRROR" };
-    const char* const invertIds[] { ids::slicerInvert, ids::shaperInvert, ids::filterInvert, ids::pitcherInvert };
+    const char* const toothNames[] { "CHOP", "FOLLOW", "BRIGHT", "PITCH", "VOICE", "POSSESS" };
+    const char* const flippedNames[] { "GAPS", "DUCK", "DARK", "MIRROR", "CARVE", "HAUNT" };
+    const char* const invertIds[] { ids::slicerInvert, ids::shaperInvert, ids::filterInvert, ids::pitcherInvert,
+                                    ids::voiceInvert, ids::possessInvert };
     const char* const toothHelp[] {
         "CHOP: every hit of the prey restarts the chewing, so the track takes on the prey's rhythm. Flipped (GAPS): the prey's silences do it. Needs Sidechain or MIDI.",
         "FOLLOW: the track's level follows the prey's loudness. Flipped (DUCK): the track ducks under the prey - a sidechain pump.",
         "BRIGHT: the prey's brightness opens a low-pass on the track. Flipped (DARK): a bright prey closes it.",
-        "PITCH: MIDI notes pitch the track (C3 = unchanged). Flipped (MIRROR): the intervals turn upside down."
+        "PITCH: MIDI notes pitch the track (C3 = unchanged). Flipped (MIRROR): the intervals turn upside down.",
+        "VOICE: the track speaks with the prey's voice - a vocoder. Route a vocal (or anything) to PREY IN and the track takes on its words and rhythm. Flipped (CARVE): the track makes room wherever the prey is loud, band by band. Needs Sidechain.",
+        "POSSESS: the prey plays the Mimic. Every hit of the prey fires a stutter, roll, reverse... (whatever it chews) right there. Works with Self too: the track's own hits. Flipped (HAUNT): the prey's silences fire them."
     };
 
     // Where the chest is drawn; its drawing is in a 500 x 450 box.
@@ -192,9 +195,11 @@ void MimicEditor::Look::drawToggleButton (juce::Graphics& g, juce::ToggleButton&
         if (b.getToggleState())
             g.fillRoundedRectangle (box.reduced (4.0f), 1.5f);
 
+        // The teeth's narrow Flip switches get a smaller label.
+        const bool narrow = b.getWidth() < 64;
         g.setColour (highlighted ? bone : dim);
-        g.setFont (font (typewriter, 13.0f));
-        g.drawText (b.getButtonText(), 24, 0, b.getWidth() - 24, b.getHeight(), juce::Justification::centredLeft);
+        g.setFont (font (typewriter, narrow ? 11.0f : 13.0f));
+        g.drawText (b.getButtonText(), narrow ? 21 : 24, 0, b.getWidth() - (narrow ? 21 : 24), b.getHeight(), juce::Justification::centredLeft);
         return;
     }
 
@@ -391,10 +396,10 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     prey.box.setTooltip ("What the teeth listen to. Self: the track itself. Sidechain: another track routed to PREY IN. MIDI: the notes you play.");
     material.box.setTooltip ("What the Mimic thinks the track is. Auto listens; the footer shows what it hears.");
 
-    Knob* teeth[] { &slicer, &shaper, &filter, &pitcher };
-    const char* teethIds[] { ids::slicer, ids::shaper, ids::filter, ids::pitcher };
+    Knob* teeth[] { &slicer, &shaper, &filter, &pitcher, &voiceTooth, &possess };
+    const char* teethIds[] { ids::slicer, ids::shaper, ids::filter, ids::pitcher, ids::voice, ids::possess };
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < numTeeth; ++i)
     {
         setUpKnob (drawer, *teeth[i], teethIds[i], toothNames[i], true);
         teeth[i]->slider.setTooltip (toothHelp[i]);
@@ -526,16 +531,18 @@ void MimicEditor::updateModeControls()
 
 void MimicEditor::updateTeethNames()
 {
-    Knob* teeth[] { &slicer, &shaper, &filter, &pitcher };
+    Knob* teeth[] { &slicer, &shaper, &filter, &pitcher, &voiceTooth, &possess };
     const int source = prey.box.getSelectedItemIndex();
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < numTeeth; ++i)
     {
         teeth[i]->label.setText (inverts[i].button.getToggleState() ? flippedNames[i] : toothNames[i], juce::dontSendNotification);
 
-        // CHOP needs a prey of its own; PITCH needs MIDI notes.
+        // CHOP needs a prey of its own; PITCH needs MIDI notes; VOICE
+        // needs audio at PREY IN.
         const bool works = (i == 0 && source == ids::preySelf) ? false
-                         : (i == 3 && source != ids::preyMidi) ? false : true;
+                         : (i == 3 && source != ids::preyMidi) ? false
+                         : (i == 4 && source != ids::preySidechain) ? false : true;
         teeth[i]->slider.setAlpha (works ? 1.0f : 0.35f);
         teeth[i]->label.setAlpha (works ? 1.0f : 0.35f);
         inverts[i].button.setAlpha (works ? 1.0f : 0.35f);
@@ -900,17 +907,18 @@ void MimicEditor::paint (juce::Graphics& g)
 
     status.draw (g, juce::Rectangle<float> (24.0f, 578.0f, 440.0f, 32.0f));
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < numTeeth; ++i)
     {
         const float level = juce::jlimit (0.0f, 1.0f, mimicProcessor.toothOut[i].load() * 3.0f);
-        const float x = 468.0f + (float) i * 72.0f;
+        const float x = 476.0f + (float) (i % 3) * 96.0f;
+        const float y = 577.0f + (float) (i / 3) * 20.0f;
         juce::Path tooth;
-        tooth.addTriangle (x, 588.0f, x + 12.0f, 588.0f, x + 6.0f, 602.0f);
+        tooth.addTriangle (x, y + 2.0f, x + 11.0f, y + 2.0f, x + 5.5f, y + 14.0f);
         g.setColour (juce::Colour (0xff5a4a3a).interpolatedWith (bone, level));
         g.fillPath (tooth);
         g.setColour (level > 0.05f ? bone : dim);
         g.setFont (font (look.typewriter, 11.0f));
-        g.drawText (value (invertIds[i]) > 0.5f ? flippedNames[i] : toothNames[i], (int) x + 16, 586, 56, 16, juce::Justification::centredLeft);
+        g.drawText (value (invertIds[i]) > 0.5f ? flippedNames[i] : toothNames[i], (int) x + 15, (int) y, 76, 16, juce::Justification::centredLeft);
     }
 }
 
@@ -940,7 +948,7 @@ void MimicEditor::paintDrawer (juce::Graphics& g)
     g.setColour (dim);
     g.setFont (font (look.typewriter, 11.0f));
     g.drawFittedText ("A resonant filter that moves with the grid.",
-                      throatArea.getX() + 150, throatArea.getY() + 40, throatArea.getWidth() - 160, 40, juce::Justification::centredLeft, 3);
+                      throatArea.getX() + 122, throatArea.getY() + 34, throatArea.getWidth() - 130, 50, juce::Justification::centredLeft, 4);
 
     // What the prey is doing.
     const int source = juce::roundToInt (value (ids::prey));
@@ -998,10 +1006,10 @@ void MimicEditor::resized()
 
     // The drawer, below the front page.
     drawer.setBounds (0, frontHeight, getWidth(), drawerHeight);
-    grooveArea = { 8, 10, 196, 218 };
-    throatArea = { 210, 10, 244, 218 };
-    fillsArea = { 460, 10, 172, 218 };
-    preyArea = { 638, 10, 254, 218 };
+    grooveArea = { 8, 10, 176, 218 };
+    throatArea = { 190, 10, 224, 218 };
+    fillsArea = { 420, 10, 150, 218 };
+    preyArea = { 576, 10, 316, 218 };
 
     auto placeKnob = [] (Knob& k, int x, int y, int size)
     {
@@ -1009,35 +1017,35 @@ void MimicEditor::resized()
         k.slider.setBounds (x, y + 16, size, size + 16);
     };
 
-    placeKnob (swing, 20, 38, 46);
-    placeKnob (breaks, 82, 38, 46);
-    placeKnob (throwKnob, 144, 38, 46);
-    placeKnob (output, 44, 128, 46);
-    placeKnob (monoBass, 118, 128, 46);
+    placeKnob (swing, 22, 38, 44);
+    placeKnob (breaks, 76, 38, 44);
+    placeKnob (throwKnob, 130, 38, 44);
+    placeKnob (output, 40, 128, 44);
+    placeKnob (monoBass, 106, 128, 44);
 
-    placePick (throatType, 224, 38, 120);
-    placeKnob (cutoff, 222, 128, 44);
-    placeKnob (resonance, 280, 128, 44);
-    placeKnob (move, 338, 128, 44);
-    placeKnob (glide, 396, 128, 44);
+    placePick (throatType, 202, 38, 110);
+    placeKnob (cutoff, 202, 128, 42);
+    placeKnob (resonance, 254, 128, 42);
+    placeKnob (move, 306, 128, 42);
+    placeKnob (glide, 358, 128, 42);
 
-    placeKnob (anticipation, 478, 38, 46);
-    placeKnob (lure, 560, 38, 46);
-    replace.button.setBounds (472, 124, 150, 22);
-    escalate.button.setBounds (472, 148, 150, 22);
-    keep.button.setBounds (472, 172, 150, 22);
-    reroll.setBounds (472, 196, 150, 26);
+    placeKnob (anticipation, 436, 38, 44);
+    placeKnob (lure, 506, 38, 44);
+    replace.button.setBounds (430, 124, 132, 22);
+    escalate.button.setBounds (430, 148, 132, 22);
+    keep.button.setBounds (430, 172, 132, 22);
+    reroll.setBounds (430, 196, 132, 26);
 
-    placePick (prey, 650, 36, 114);
-    placePick (material, 770, 36, 110);
-    preyMeter = { 650, 104, 230, 6 };
+    placePick (prey, 588, 36, 140);
+    placePick (material, 736, 36, 144);
+    preyMeter = { 588, 104, 292, 6 };
 
-    Knob* teeth[] { &slicer, &shaper, &filter, &pitcher };
+    Knob* teeth[] { &slicer, &shaper, &filter, &pitcher, &voiceTooth, &possess };
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < numTeeth; ++i)
     {
-        const int x = 654 + i * 58;
-        placeKnob (*teeth[i], x, 116, 42);
-        inverts[i].button.setBounds (x - 6, 192, 56, 20);
+        const int x = 592 + i * 50;
+        placeKnob (*teeth[i], x, 116, 40);
+        inverts[i].button.setBounds (x - 5, 192, 50, 20);
     }
 }

@@ -368,6 +368,18 @@ namespace mimic
         return h;
     }
 
+    Segment makeEvent (const GenSettings& g, double length, uint64_t seed)
+    {
+        Rng r (seed);
+        const float I = std::pow (juce::jlimit (0.0f, 1.0f, g.intensity), 1.35f);
+        const auto kind = pickKind (r, g, false, Kind::pass, true);
+
+        if (kind == Kind::pass)
+            return passSegment (0.0, length);
+
+        return makeSegment (kind, 0.0, length, I, g, r);
+    }
+
     void generate (Script& script, const GenSettings& g, uint64_t seed)
     {
         script.clear();
@@ -1583,6 +1595,121 @@ namespace mimic
     }
 
     //==========================================================================
+    //==========================================================================
+    void Vocoder::prepare (double sampleRate)
+    {
+        // Bands spread evenly in octaves from 90 Hz to 10 kHz, about a
+        // third of an octave apart.
+        for (int k = 0; k < numBands; ++k)
+        {
+            const float hz = 90.0f * std::pow (10000.0f / 90.0f, (float) k / (float) (numBands - 1));
+            mod[k].set (hz, 4.0f, sampleRate);
+            car[k].set (hz, 4.0f, sampleRate);
+        }
+
+        modAtt = coeff (0.002, sampleRate);
+        modRel = coeff (0.025, sampleRate);
+        carAtt = coeff (0.008, sampleRate);
+        carRel = coeff (0.06, sampleRate);
+        peakRel = coeff (3.0, sampleRate);
+        duckAtt = coeff (0.004, sampleRate);
+        duckRel = coeff (0.15, sampleRate);
+        reset();
+    }
+
+    void Vocoder::reset()
+    {
+        for (int k = 0; k < numBands; ++k)
+        {
+            mod[k].reset();
+            car[k].reset();
+            modEnv[k] = carEnv[k] = duckEnv[k] = 0.0f;
+        }
+
+        totalPeak = 0.0f;
+    }
+
+    void Vocoder::process (float& l, float& r, float prey, bool carve)
+    {
+        float bandL[numBands], bandR[numBands];
+        float modSquares = 0.0f, carSquares = 0.0f;
+
+        for (int k = 0; k < numBands; ++k)
+        {
+            const float m = std::abs (mod[k].process (0, prey, 2));
+            modEnv[k] += (m > modEnv[k] ? modAtt : modRel) * (m - modEnv[k]);
+
+            bandL[k] = car[k].process (0, l, 2);
+            bandR[k] = car[k].process (1, r, 2);
+            const float c = 0.5f * (std::abs (bandL[k]) + std::abs (bandR[k]));
+            carEnv[k] += (c > carEnv[k] ? carAtt : carRel) * (c - carEnv[k]);
+
+            modSquares += modEnv[k] * modEnv[k];
+            carSquares += carEnv[k] * carEnv[k];
+        }
+
+        // How loud the prey is now against its recent peak.
+        const float modNorm = std::sqrt (modSquares);
+        totalPeak = modNorm > totalPeak ? modNorm : totalPeak + peakRel * (modNorm - totalPeak);
+        const float reference = totalPeak + 1.0e-7f;
+
+        float outL = 0.0f, outR = 0.0f;
+
+        if (carve)
+        {
+            // The track clears the range the prey sings in: every band
+            // within about 18 dB of the prey's loudest band now ducks all
+            // the way (42 dB down not at all), as deep as the prey is loud
+            // against its recent peak.
+            float loudest = 1.0e-9f;
+
+            for (int k = 0; k < numBands; ++k)
+                loudest = juce::jmax (loudest, modEnv[k]);
+
+            const float level = juce::jlimit (0.0f, 1.0f, (std::log2 (modNorm / reference + 1.0e-9f) + 5.0f) * 0.25f);
+
+            float shape[numBands];
+
+            for (int k = 0; k < numBands; ++k)
+                shape[k] = juce::jlimit (0.0f, 1.0f, (std::log2 (modEnv[k] / loudest + 1.0e-9f) + 7.0f) * 0.25f);
+
+            for (int k = 0; k < numBands; ++k)
+            {
+                // The hole spreads a band either side, so it is heard.
+                const float spread = 0.7f * juce::jmax (k > 0 ? shape[k - 1] : 0.0f, k < numBands - 1 ? shape[k + 1] : 0.0f);
+                // Opens fast, closes slowly: the hole stays through a phrase.
+                const float target = juce::jmax (shape[k], spread) * level;
+                duckEnv[k] += (target > duckEnv[k] ? duckAtt : duckRel) * (target - duckEnv[k]);
+                const float duck = duckEnv[k];
+                outL += bandL[k] * duck;
+                outR += bandR[k] * duck;
+            }
+
+            // The bands overlap and sum to about 1.5: where the prey fills
+            // the bands, the track drops by 12 dB or more.
+            l -= 0.64f * outL;
+            r -= 0.64f * outR;
+            return;
+        }
+
+        // The track, flattened band by band, takes the prey's spectral
+        // shape and its level.
+        const float carRms = std::sqrt (carSquares);
+        const float floorLevel = 0.15f * carRms + 1.0e-7f;
+        const float level = juce::jmin (1.0f, 1.5f * modNorm / reference);
+        const float shape = level / (modNorm + 1.0e-7f);
+
+        for (int k = 0; k < numBands; ++k)
+        {
+            const float gain = modEnv[k] * shape * carRms / juce::jmax (carEnv[k], floorLevel);
+            outL += bandL[k] * gain;
+            outR += bandR[k] * gain;
+        }
+
+        l = outL;
+        r = outR;
+    }
+
     void PitchShifter::prepare (double sampleRate)
     {
         int size = 1;

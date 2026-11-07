@@ -129,6 +129,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
     add (ids::filterGlide, "Filter Glide", { 0.0f, 1.0f }, 1.0f,
          AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return v < 0.005f ? String ("Steps") : String (roundToInt (v * 100.0f)) + " %"; }));
 
+    add (ids::voice, "Voice", { 0.0f, 1.0f }, 0.0f, percent);
+    toggle (ids::voiceInvert, "Voice Invert", false);
+    add (ids::possess, "Possess", { 0.0f, 1.0f }, 0.0f, percent);
+    toggle (ids::possessInvert, "Possess Invert", false);
+
     return layout;
 }
 
@@ -165,6 +170,11 @@ void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     classifier.prepare (sr);
     player.prepare (sr, &history, &mainOnsets);
     shifter.prepare (sr);
+    vocoder.prepare (sr);
+    voiceMix = 0.0f;
+    voiceStep = coeff (0.01, sr);
+    possessEnd = -1;
+    possessFlash = 0.0f;
     toothFilter.reset();
     riser.reset();
     throat.reset();
@@ -228,6 +238,7 @@ void MimicProcessor::discontinuity()
     player.beginPass (now);
     player.setValidFrom (now);
     segmentIndex = -1;
+    possessEnd = -1;
     spanKey = std::numeric_limits<int64_t>::min();
     fillsInRow = 0;
     wasInFill = false;
@@ -263,6 +274,7 @@ void MimicProcessor::startSpan (int64_t key, double start, const GenSettings& g,
     }
 
     slicerRng = Rng (hash64 (seed, 5));
+    possessRng = Rng (hash64 (seed, 7));
     throwRng = Rng (hash64 (seed, 6));
 }
 
@@ -346,6 +358,8 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const float filterAmount = value (ids::filter), pitcherAmount = value (ids::pitcher);
     const bool slicerInvert = flag (ids::slicerInvert), shaperInvert = flag (ids::shaperInvert);
     const bool filterInvert = flag (ids::filterInvert), pitcherInvert = flag (ids::pitcherInvert);
+    const float voiceAmount = value (ids::voice), possessAmount = value (ids::possess);
+    const bool voiceInvert = flag (ids::voiceInvert), possessInvert = flag (ids::possessInvert);
     const float monoBass = value (ids::monoBass);
     const float swing = value (ids::swing);
     const float breaks = value (ids::breaks);
@@ -575,7 +589,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
         // The prey: envelope, brightness, strikes and gaps.
         bool preyStrike = false;
-        float envN = 0.0f;
+        float envN = 0.0f, preyMono = 0.0f;
 
         if (preySource == ids::preyMidi)
         {
@@ -592,6 +606,8 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
             if (preySource == ids::preySidechain && scL != nullptr)
                 pm = 0.5f * (scL[i] + scR[i]);
+
+            preyMono = pm;
 
             const bool onset = preySource == ids::preySelf ? mainOnset : preyDetector.process (pm);
             preyStrike = onset;
@@ -698,6 +714,15 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         if (inFill && escalate)
             intensity *= 0.55f + 0.45f * (float) juce::jmin (fillsInRow, 3) / 3.0f;
 
+        // A possessed event plays out before the script takes over again.
+        if (possessEnd >= 0 && now >= possessEnd)
+        {
+            possessEnd = -1;
+            segmentIndex = -2;   // pick up the script wherever it is now
+        }
+
+        const bool possessed = possessEnd >= 0;
+
         if (haveSpan)
         {
             lastFillKey = key;
@@ -712,9 +737,9 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             }
 
             const double pos = tl - spanStart;
-            const auto* seg = segmentIndex >= 0 ? &script.segments[(size_t) segmentIndex] : nullptr;
+            const auto* seg = segmentIndex >= 0 && segmentIndex < script.count ? &script.segments[(size_t) segmentIndex] : nullptr;
 
-            if (seg == nullptr || pos < seg->start - 1.0e-9 || pos >= seg->start + seg->length - 1.0e-9)
+            if (! possessed && (seg == nullptr || pos < seg->start - 1.0e-9 || pos >= seg->start + seg->length - 1.0e-9))
             {
                 const int index = script.find (pos);
 
@@ -734,7 +759,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
                 }
             }
         }
-        else if (segmentIndex != -1 || player.active())
+        else if (! possessed && (segmentIndex != -1 || player.active()))
         {
             player.beginPass (now);
             segmentIndex = -1;
@@ -754,6 +779,31 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             strikeFlash = 1.0f;
         }
 
+        // Possess: a prey hit (or, flipped, a silence) fires one of the
+        // Mimic's events right there, a step or two long. The next hit may
+        // cut it short, but not before a step has played.
+        if (possessAmount > 0.0f && (possessInvert ? preyGap : preyStrike) && now >= possessNext
+            && possessRng.chance (juce::jmin (1.0f, 1.3f * possessAmount) * teeth))
+        {
+            GenSettings e = g;
+            e.intensity = juce::jmax (0.35f, intensity);
+            e.offsetInBar = tl - barStart;
+            e.fill = false;
+            const double steps = possessRng.chance (0.3f + 0.5f * possessAmount) ? 4.0 : 2.0;
+            const double length = juce::jmin (barLen, steps * step);
+            auto event = makeEvent (e, length, possessRng.next());
+
+            if (event.kind != Kind::pass)
+            {
+                const auto samples = (int64_t) (length * spq);
+                player.begin (event, now, spq, samples);
+                possessEnd = now + samples;
+                possessNext = now + (int64_t) (step * spq * 0.9);
+                segmentIndex = -2;
+                possessFlash = 1.0f;
+            }
+        }
+
         float wl, wr;
         Player::Weights weights;
         player.render (now, inL, inR, wl, wr, weights);
@@ -766,6 +816,19 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         const float keepDry = 1.0f - juce::jmin (1.0f, weights.rest);
         float sl = replaceMix * wl + (1.0f - replaceMix) * (inL * keepDry + 0.55f * fxL);
         float sr2 = replaceMix * wr + (1.0f - replaceMix) * (inR * keepDry + 0.55f * fxR);
+
+        // Voice: the track speaks with the prey's voice, or (Carve) makes
+        // room for it. Needs an audio prey on the side input.
+        const bool voiceWorks = voiceAmount > 0.0f && preySource == ids::preySidechain && scL != nullptr;
+        voiceMix += voiceStep * ((voiceWorks ? voiceAmount * teeth : 0.0f) - voiceMix);
+
+        if (voiceWorks || voiceMix > 1.0e-4f)
+        {
+            float vl = sl, vr = sr2;
+            vocoder.process (vl, vr, preyMono, voiceInvert);
+            sl += voiceMix * (vl - sl);
+            sr2 += voiceMix * (vr - sr2);
+        }
 
         // Shaper: the prey's envelope shapes the level.
         if (shaperAmount > 0.0f)
@@ -963,6 +1026,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         }
 
         strikeFlash *= 0.9995f;
+        possessFlash *= 0.9995f;
     }
 
     if (sendCount > 0)
@@ -995,6 +1059,8 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     toothOut[1].store (shaperAmount * teethShown, std::memory_order_relaxed);
     toothOut[2].store (filterAmount * teethShown, std::memory_order_relaxed);
     toothOut[3].store (preySource == ids::preyMidi ? pitcherAmount * teethShown : 0.0f, std::memory_order_relaxed);
+    toothOut[4].store (preySource == ids::preySidechain ? voiceMix : 0.0f, std::memory_order_relaxed);
+    toothOut[5].store (possessFlash, std::memory_order_relaxed);
 }
 
 void MimicProcessor::flushThrow (float* left, float* right, int start, int count, float returnGain)

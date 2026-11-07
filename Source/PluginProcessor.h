@@ -50,7 +50,7 @@ public:
     std::atomic<float> engageOut { 0.0f };        // how much of the output is the Mimic
     std::atomic<int> kindOut { 0 };               // mimic::Kind playing now
     std::atomic<int> barsToFillOut { -1 };        // bars until the next scheduled fill
-    std::atomic<float> toothOut[4] { 0.0f, 0.0f, 0.0f, 0.0f };   // slicer, shaper, filter, pitcher
+    std::atomic<float> toothOut[6] { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };   // slicer, shaper, filter, pitcher, voice, possess
     std::atomic<bool> sidechainMissing { false };
     std::atomic<bool> transportPlaying { false };
     std::atomic<float> throwOut { 0.0f };          // a hit just went into the reverb
@@ -125,7 +125,12 @@ private:
     bool preyHigh = false;
     int midiNote = -1, midiHeld = 0;
     float midiVelocity = 0.0f;
-    mimic::Rng slicerRng;
+    mimic::Rng slicerRng, possessRng;
+
+    // Voice and Possess.
+    mimic::Vocoder vocoder;
+    float voiceMix = 0.0f, voiceStep = 0.0f, possessFlash = 0.0f;
+    int64_t possessEnd = -1, possessNext = 0;
 
     // Teeth.
     mimic::Svf toothFilter, riser;

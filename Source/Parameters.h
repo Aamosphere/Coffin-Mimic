@@ -69,6 +69,14 @@ namespace mimic::ids
     inline constexpr const char* phraseStart  = "phraseStart";
     inline constexpr const char* filterGlide  = "filterGlide";
 
+    // v0.6: two more teeth. Voice: the track speaks with the prey's voice
+    // (flipped, Carve: the prey carves itself out of the track). Possess:
+    // the prey's hits fire the Mimic's events (flipped, Haunt: its silences).
+    inline constexpr const char* voice        = "voice";
+    inline constexpr const char* voiceInvert  = "voiceInvert";
+    inline constexpr const char* possess      = "possess";
+    inline constexpr const char* possessInvert = "possessInvert";
+
     enum Loop { loopRepeat, loopEvolve };
     inline const juce::StringArray loopNames { "Same every pass", "New every pass" };
 
