@@ -898,6 +898,22 @@ namespace mimic
         envRel = coeff (0.060, rate);
         peakRel = coeff (1.5, rate);
         frame.assign (2048, 0.0f);
+
+        // About 45 ms frames at any rate, half overlapped.
+        int order = 11;
+        while ((1 << order) < (int) (rate * 0.042)) ++order;
+        fftSize = 1 << order;
+        hop = fftSize / 2;
+        fft = std::make_unique<juce::dsp::FFT> (order);
+        ring.assign ((size_t) fftSize, 0.0f);
+        window.assign ((size_t) fftSize, 0.0f);
+        fftData.assign ((size_t) fftSize * 2, 0.0f);
+        magnitude.assign ((size_t) fftSize / 2, 0.0f);
+        previousMagnitude.assign ((size_t) fftSize / 2, 0.0f);
+
+        for (int i = 0; i < fftSize; ++i)
+            window[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) fftSize);
+
         reset();
     }
 
@@ -915,6 +931,10 @@ namespace mimic
         current = candidate = percussive;
         candidateSeconds = 0.0f;
         primed = false;
+        tonal = flatness = lowShare = heardSeconds = 0.0f;
+        ringWrite = hopCount = spectralFrames = 0;
+        std::fill (ring.begin(), ring.end(), 0.0f);
+        std::fill (previousMagnitude.begin(), previousMagnitude.end(), 0.0f);
     }
 
     void Classifier::push (float mono, bool onset)
@@ -928,6 +948,15 @@ namespace mimic
 
         if (onset)
             ++onsets;
+
+        ring[(size_t) ringWrite] = mono;
+        ringWrite = (ringWrite + 1) % fftSize;
+
+        if (++hopCount >= hop)
+        {
+            hopCount = 0;
+            analyseSpectrum();
+        }
 
         lp1 += lpCoeff * (mono - lp1);
         lp2 += lpCoeff * (lp1 - lp2);
@@ -1001,6 +1030,129 @@ namespace mimic
         }
 
         return best;
+    }
+
+    void Classifier::analyseSpectrum()
+    {
+        double energy = 0.0;
+
+        for (int i = 0; i < fftSize; ++i)
+        {
+            const float x = ring[(size_t) ((ringWrite + i) % fftSize)];
+            energy += (double) x * x;
+            fftData[(size_t) i] = x * window[(size_t) i];
+        }
+
+        // Silence tells nothing.
+        if (std::sqrt (energy / fftSize) < 1.0e-3)
+            return;
+
+        std::fill (fftData.begin() + fftSize, fftData.end(), 0.0f);
+        fft->performFrequencyOnlyForwardTransform (fftData.data());
+
+        const int half = fftSize / 2;
+        std::copy (fftData.begin(), fftData.begin() + half, magnitude.begin());
+
+        const double binHz = sampleRate / fftSize;
+        const int lo = juce::jmax (8, (int) (150.0 / binHz)), hi = juce::jmin (half - 8, (int) (6000.0 / binHz));
+        const int reach = juce::jmax (3, (int) std::lround (130.0 / binHz));   // the neighbourhood of a peak
+        double low = 0.0, total = 0.0, stable = 0.0, logSum = 0.0;
+
+        for (int k = 1; k < lo; ++k)
+            low += (double) magnitude[(size_t) k] * magnitude[(size_t) k];
+
+        for (int k = lo; k < hi; ++k)
+        {
+            const float m = magnitude[(size_t) k];
+            const double p = (double) m * m + 1.0e-14;
+            total += p;
+            logSum += std::log (p);
+
+            // A stable peak: a local maximum well above its neighbourhood
+            // that was there in the last frame too. Notes and chords make
+            // these; drums and noise do not.
+            if (m > magnitude[(size_t) k - 1] && m >= magnitude[(size_t) k + 1])
+            {
+                float around = 0.0f;
+
+                for (int j = -reach; j <= reach; ++j)
+                    around += magnitude[(size_t) juce::jlimit (0, half - 1, k + j)];
+
+                around /= (float) (2 * reach + 1);
+                const float before = juce::jmax (previousMagnitude[(size_t) k - 1], previousMagnitude[(size_t) k], previousMagnitude[(size_t) k + 1]);
+
+                if (m > 2.5f * around && before > 0.5f * m && before < 2.0f * m)
+                    stable += p + (double) magnitude[(size_t) k - 1] * magnitude[(size_t) k - 1]
+                                + (double) magnitude[(size_t) k + 1] * magnitude[(size_t) k + 1];
+            }
+        }
+
+        std::copy (magnitude.begin(), magnitude.end(), previousMagnitude.begin());
+
+        const int bins = hi - lo;
+        const float frameTonal = (float) juce::jmin (1.0, stable / total);
+        const float frameFlat = (float) (std::exp (logSum / bins) / (total / bins));
+        const float frameLow = (float) (low / (low + total));
+
+        // About a second and a half of memory; the first frames set it.
+        const float a = spectralFrames < 4 ? 1.0f / (float) (spectralFrames + 1)
+                                           : (float) (hop / (1.5 * sampleRate));
+        tonal += a * (frameTonal - tonal);
+        flatness += a * (frameFlat - flatness);
+        lowShare += a * (frameLow - lowShare);
+        ++spectralFrames;
+    }
+
+    void Classifier::decide (float seconds)
+    {
+        // A bass: most of it below 150 Hz, and not noise. A single line.
+        const bool bass = lowShare > 0.55f && flatness < 0.03f;
+
+        // Drums: noise-like, few stable peaks. Once drums, the track needs
+        // clearly more tone to be heard as something else.
+        // (Noise counts most: dense chords can have few clean peaks, but
+        // they are never flat.)
+        const bool wasDrums = current == percussive && primed;
+        const float drumScore = 6.0f * flatness + 1.5f * (0.45f - tonal);
+        const bool drums = ! bass && spectralFrames > 0 && drumScore > (wasDrums ? 0.8f : 0.95f);
+
+        // A voice glides and wobbles between the notes; an instrument sits
+        // on them.
+        const bool voice = ! bass && lowShare < 0.3f && clarity > 0.45f && pitchDrift > 12.0f && pitchWobble > 10.0f;
+
+        const int guess = drums ? percussive
+                        : bass ? melodic
+                        : voice ? vocal
+                        : (clarity > 0.8f ? melodic : harmonic);
+
+        // The first impression waits until it has heard a little.
+        if (! primed)
+        {
+            heardSeconds += seconds;
+            candidate = guess;
+
+            if (heardSeconds >= 0.8f)
+            {
+                current = guess;
+                primed = true;
+            }
+        }
+        else if (guess == current)
+        {
+            candidateSeconds = 0.0f;
+        }
+        else if (guess == candidate)
+        {
+            candidateSeconds += seconds;
+
+            if (candidateSeconds > 0.7f)
+                current = guess;
+        }
+        else
+        {
+            candidate = guess;
+            candidateSeconds = seconds;
+        }
     }
 
     void Classifier::analyse()
@@ -1078,7 +1230,7 @@ namespace mimic
 
             const float frameSustain = (float) (envSum / juce::jmax (1.0e-9, peakSum));
             const float frameRate = (float) (onsets / juce::jmax (1.0e-3, seconds));
-            const float a = primed ? 0.25f : 1.0f;
+            const float a = heardSeconds > 0.0f || primed ? 0.25f : 1.0f;
             clarity += a * (best - clarity);
             sustain += a * (frameSustain - sustain);
             onsetRate += a * (frameRate - onsetRate);
@@ -1091,31 +1243,7 @@ namespace mimic
                 pitchWobble += a * ((wobbleCount > 0 ? wobbleSum / (float) wobbleCount : 0.0f) - pitchWobble);
             }
 
-            const bool drums = sustain < 0.42f && onsetRate > 0.8f && clarity < 0.85f;
-            const bool voice = clarity > 0.45f && pitchDrift > 11.0f && pitchWobble > 6.0f;
-            const int guess = drums ? percussive : (voice ? vocal : (clarity > 0.72f ? melodic : harmonic));
-
-            if (! primed)
-            {
-                current = candidate = guess;
-                primed = true;
-            }
-            else if (guess == current)
-            {
-                candidateSeconds = 0.0f;
-            }
-            else if (guess == candidate)
-            {
-                candidateSeconds += (float) seconds;
-
-                if (candidateSeconds > 1.0f)
-                    current = guess;
-            }
-            else
-            {
-                candidate = guess;
-                candidateSeconds = (float) seconds;
-            }
+            decide ((float) seconds);
         }
 
         envSum = peakSum = 0.0;
@@ -1197,11 +1325,13 @@ namespace mimic
             return;
         }
 
-        // A Break fades the sound out over 7 ms instead of cutting it, so a
-        // ringing kick does not click; out of one, a little softer too.
+        // A Break fades the sound out over 8 ms instead of cutting it, so a
+        // ringing kick does not click (the processor starts it a little
+        // early, so the fade is over by the grid line); out of one, a little
+        // softer too.
         const bool isRest = seg.kind == Kind::rest;
         const bool fromRest = current.alive && current.kind == Kind::rest;
-        pushTail (isRest ? 0.007 : 0.0015);
+        pushTail (isRest ? 0.008 : 0.0015);
         Voice v;
         v.alive = true;
         v.kind = seg.kind;
@@ -1334,7 +1464,7 @@ namespace mimic
 
         v.filterOn = seg.highPass || seg.cutStart < 0.999f || seg.cutEnd < 0.999f;
         v.fade = 0.0f;
-        v.fadeStep = isRest ? 1.0f / (float) (sr * 0.007)
+        v.fadeStep = isRest ? 1.0f / (float) (sr * 0.008)
                    : (fromRest && ! aligned) ? 1.0f / (float) (sr * 0.004)
                                              : 1.0f / fadeSamples (aligned);
         current = v;
@@ -1701,15 +1831,19 @@ namespace mimic
         if (repeats && (double) (now - current.startNow - current.repStart) >= current.repeatS)
             startRepeat (current, now);
 
+        // Fades are S-shaped: no corner at either end to tick.
+        auto shape = [] (float f) { f = juce::jlimit (0.0f, 1.0f, f); return f * f * (3.0f - 2.0f * f); };
+
         float l = 0.0f, r = 0.0f;
         renderVoice (current, now, inL, inR, l, r);
-        outL += l * current.fade;
-        outR += r * current.fade;
+        const float g = shape (current.fade);
+        outL += l * g;
+        outR += r * g;
 
         if (current.kind == Kind::pass || current.kind == Kind::echo)
-            w.pass += current.fade;
+            w.pass += g;
         else if (current.kind == Kind::rest)
-            w.rest += current.fade;
+            w.rest += g;
 
         current.fade = juce::jmin (1.0f, current.fade + current.fadeStep);
 
@@ -1719,13 +1853,14 @@ namespace mimic
                 continue;
 
             renderVoice (t, now, inL, inR, l, r);
-            outL += l * t.fade;
-            outR += r * t.fade;
+            const float tg = shape (t.fade);
+            outL += l * tg;
+            outR += r * tg;
 
             if (t.kind == Kind::pass || t.kind == Kind::echo)
-                w.pass += t.fade;
+                w.pass += tg;
             else if (t.kind == Kind::rest)
-                w.rest += t.fade;
+                w.rest += tg;
 
             t.fade -= t.fadeStep;
 

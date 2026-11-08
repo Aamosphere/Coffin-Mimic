@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Mimic VERSION 0.7.0)
+project(Mimic VERSION 0.8.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0")
 
@@ -30,6 +30,7 @@ juce_add_plugin(Mimic
 
 set(MIMIC_DSP_SOURCES
     Source/Engine.cpp
+    Source/Answer.cpp
     Source/Reverb.cpp
     Source/PluginProcessor.cpp
     Source/Presets.cpp)
@@ -81,4 +82,19 @@ if(MIMIC_BUILD_TESTS)
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags)
+    juce_add_console_app(MimicClassify PRODUCT_NAME "MimicClassify")
+    juce_generate_juce_header(MimicClassify)
+    target_sources(MimicClassify PRIVATE Tests/Classify.cpp Source/Engine.cpp)
+    target_compile_definitions(MimicClassify PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_link_libraries(MimicClassify PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    juce_add_console_app(MimicAnswerTest PRODUCT_NAME "MimicAnswerTest")
+    juce_generate_juce_header(MimicAnswerTest)
+    target_sources(MimicAnswerTest PRIVATE Tests/AnswerTest.cpp ${MIMIC_DSP_SOURCES})
+    target_compile_definitions(MimicAnswerTest PRIVATE MIMIC_HEADLESS=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_link_libraries(MimicAnswerTest PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    juce_add_console_app(MimicStretchProbe PRODUCT_NAME "MimicStretchProbe")
+    juce_generate_juce_header(MimicStretchProbe)
+    target_sources(MimicStretchProbe PRIVATE Tests/StretchProbe.cpp Source/Engine.cpp Source/Answer.cpp Source/Reverb.cpp)
+    target_compile_definitions(MimicStretchProbe PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_link_libraries(MimicStretchProbe PRIVATE juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 endif()

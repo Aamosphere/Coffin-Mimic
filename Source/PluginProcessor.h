@@ -5,6 +5,7 @@
 #include "Engine.h"
 #include "Presets.h"
 #include "Reverb.h"
+#include "Answer.h"
 
 class MimicProcessor : public juce::AudioProcessor
 {
@@ -24,7 +25,7 @@ public:
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.1; }
+    double getTailLengthSeconds() const override { return 8.0; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -57,6 +58,12 @@ public:
     std::atomic<float> pitchDriftOut { 0.0f };
     std::atomic<int> possessCount { 0 };           // events the prey has fired
     std::atomic<double> lastPossessPpq { 0.0 };    // song position of the last one
+
+    // The answers: what the Mimic is doing (mimic::Answerer::State), which
+    // trick it plays, how long it has waited, how far the answer is.
+    std::atomic<int> answerStateOut { 0 }, answerTrickOut { -1 }, answerCountOut { 0 };
+    std::atomic<float> answerWaitOut { 0.0f }, answerProgressOut { 0.0f };
+    std::atomic<float> inputLevelOut { 0.0f };
 
     // The script playing now, for the pattern display: per segment the
     // start and length in 1/96 ppq and the kind, packed.
@@ -93,12 +100,18 @@ private:
     mimic::PitchShifter shifter;
     mimic::Script script, previousScript;
 
+    mimic::Answerer answerer;
+    std::vector<float> dryCopyL, dryCopyR, answerL, answerR;
+    float levelMeter = 0.0f;
+
     // Timeline.
     double freePpq = 0.0, expectedPpq = -1.0;
     bool wasPlaying = false;
     int64_t spanKey = std::numeric_limits<int64_t>::min();
     double spanStart = 0.0;
     int segmentIndex = -1;
+    int earlyRestIndex = -1;
+    double earlyRestAt = 0.0;
     bool wasInFill = false;
     int fillsInRow = 0;
     int64_t lastFillKey = 0;

@@ -3,12 +3,14 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 
-// The Mimic's face: a treasure chest in a dungeon. Its lid lifts and its
-// teeth grow with Bite (wider still during a fill); Bite itself is the big
-// gold lock plate. The front page holds what a preset user touches - Bite,
-// Wild/Fill and their settings, Speed, Mix and what it chews - and
-// ADVANCED opens a drawer below it with the rest, so the front page always
-// stays in view.
+// The Mimic's face: a treasure chest in a dungeon that listens to your
+// track and answers back. The front page has three sections, each in its own
+// frame:
+//   IT LISTENS  what it hears, and what it is doing about it right now
+//               (hearing, waiting for a gap, answering, stepping back)
+//   IT ANSWERS  Hunger and Mockery, the space and heat, and its tricks
+//   SNARES      the beat masher, off until switched on: mild to wild
+// ADVANCED opens a drawer below with the rest of Snares and the output.
 class MimicEditor : public juce::AudioProcessorEditor,
                     public juce::Timer
 {
@@ -59,7 +61,7 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
     };
 
-    // The drawer behind ADVANCED: it paints its own section frames.
+    // A component that paints with a function (the stage, the drawer).
     struct Drawer : juce::Component
     {
         std::function<void (juce::Graphics&)> painter;
@@ -72,15 +74,21 @@ private:
     void refreshPresets();
     void showAdvanced (bool);
     void updateModeControls();
-    void updateTeethNames();
+    void updateSnaresLook();
+    void updateChipNames();
     void paintChest (juce::Graphics&);
-    void paintModePanel (juce::Graphics&);
     void paintPattern (juce::Graphics&, juce::Rectangle<float>);
+    void paintSection (juce::Graphics&, juce::Rectangle<int>, const juce::String& title, const juce::String& subtitle, bool lit);
+    void paintListens (juce::Graphics&);
+    void paintAnswers (juce::Graphics&);
+    void paintSnares (juce::Graphics&);
     void paintDrawer (juce::Graphics&);
     void paintFront (juce::Graphics&);
+    void knobCaption (juce::Graphics&, const Knob&, const juce::String& name, const char* id, float nameSize, const juce::String& help = {});
     juce::String valueText (const char* id) const;
     float value (const char* id) const;
     bool fillMode() const;
+    int heardMaterial() const;
 
     MimicProcessor& mimicProcessor;
     Look look;
@@ -89,38 +97,42 @@ private:
     // Everything but the spine sits on the stage.
     Drawer stage;
 
-    // Front page.
-    Knob bite, speed, mix;
-    Knob breaks, throwKnob, dynamicsKnob;   // the groove column
-    Switch contents[mimic::numContent];
-    juce::TextButton wildButton { "WILD" }, fillButton { "FILL" }, advancedButton { "ADVANCED" };
-    std::unique_ptr<juce::ParameterAttachment> modeAttachment;
+    // Header.
     juce::ComboBox presetBox;
-    juce::TextButton previous { "<" }, next { ">" }, save { "SAVE" };
+    juce::TextButton previous { "<" }, next { ">" }, save { "SAVE" }, advancedButton { "ADVANCED" };
 
-    // The mode panel: Wild's pattern settings or Fill's schedule.
-    Pick variation, loop, every, length, phraseStart;
-    Knob probability;
+    // IT LISTENS.
+    Pick material;
+
+    // IT ANSWERS.
+    Knob hunger, mockery, space, heat, answerLevel;
+    Switch tricks[mimic::numTricks];
+
+    // SNARES.
+    Switch snaresOn;
+    Knob bite, speed, breaks, throwKnob, dynamicsKnob;
+    Switch contents[mimic::numContent];
+    juce::TextButton wildButton { "WILD" }, fillButton { "FILL" };
+    std::unique_ptr<juce::ParameterAttachment> modeAttachment;
 
     // The drawer.
     Drawer drawer;
-    Knob swing, output, monoBass;
+    Pick variation, loop, every, length, phraseStart;
+    Knob probability;
+    Knob swing, mix, output, monoBass;
     Pick throatType;
     Knob cutoff, resonance, move, glide;
     Knob anticipation, lure;
     Switch replace, escalate, keep;
     juce::TextButton reroll { "REROLL" };
-    Pick prey, material;
-    static constexpr int numTeeth = 6;
-    Knob slicer, shaper, filter, pitcher, voiceTooth, possess;
-    Switch inverts[numTeeth];
 
-    juce::Rectangle<int> chewsArea, modeArea, patternArea, grooveColumn, globalArea;
-    juce::Rectangle<int> grooveArea, throatArea, fillsArea, preyArea, preyMeter;
+    juce::Rectangle<int> listensArea, answersArea, snaresArea, ladderArea, chewsArea, patternArea, tricksArea, meterArea;
+    juce::Rectangle<int> patternBox, throatBox, fillsBox, outBox;
     juce::String presetShown;
     float lidOpen = 0.0f;       // smoothed lift, 0..1+
     float eyeGlow = 0.0f;
     bool fillLayout = false;
+    int chipMaterial = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MimicEditor)
 };

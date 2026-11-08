@@ -13,7 +13,7 @@ namespace mimic
     public:
         explicit PresetManager (juce::AudioProcessorValueTreeState&);
 
-        struct Info { juce::String name, tags; bool fill; };
+        struct Info { juce::String name, tags; bool fill; bool answers; };
         static const juce::Array<Info>& getFactory();
         void loadFactory (int index);
 

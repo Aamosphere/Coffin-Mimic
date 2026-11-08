@@ -203,6 +203,10 @@ namespace
             p.setBusesLayout (layout);
         }
 
+        // These tests are about Snares (the beat masher): on, and no answers
+        // laid over it (MimicAnswerTest covers those).
+        setParam (p, mimic::ids::snares, 1.0f);
+        setParam (p, mimic::ids::answer, 0.0f);
         setup (p);
         FakePlayHead head;
         p.setPlayHead (&head);

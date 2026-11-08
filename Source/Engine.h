@@ -227,8 +227,19 @@ namespace mimic
         float pitchDrift = 0.0f;    // cents off the 12-TET grid, on average
         float pitchWobble = 0.0f;   // cents of movement within notes
 
+        // The spectrum, which is what tells a strummed guitar from drums:
+        // how much of the energy sits in stable peaks (tonal), how noise-like
+        // it is (flatness) and how much of it is below 150 Hz (a bass).
+        float tonal = 0.0f, flatness = 0.0f, lowShare = 0.0f;
+
     private:
         void analyse();
+        void analyseSpectrum();
+        void decide (float seconds);
+
+        std::unique_ptr<juce::dsp::FFT> fft;
+        int fftSize = 2048, hop = 1024, ringWrite = 0, hopCount = 0, spectralFrames = 0;
+        std::vector<float> ring, window, fftData, magnitude, previousMagnitude;
         // Pitch of a stretch of the frame: clarity 0..1 and the frequency.
         float nsdfPitch (int from, int length, double& hz) const;
 
@@ -242,7 +253,7 @@ namespace mimic
         int64_t frameSamples = 0;
         double sampleRate = 44100.0;
         int current = percussive, candidate = percussive;   // until it has heard enough: the plainest versions
-        float candidateSeconds = 0.0f;
+        float candidateSeconds = 0.0f, heardSeconds = 0.0f;
         bool primed = false;
     };
 
@@ -361,7 +372,7 @@ namespace mimic
         const History* history = nullptr;
         const OnsetList* onsets = nullptr;
         Voice current;
-        std::array<Voice, 3> tails;
+        std::array<Voice, 6> tails;
     };
 
     //==========================================================================

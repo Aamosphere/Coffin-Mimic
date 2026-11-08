@@ -81,6 +81,29 @@ namespace mimic::ids
     inline constexpr const char* useEcho      = "useEcho";
     inline constexpr const char* dynamics     = "dynamics";
 
+    // v0.8: the Mimic answers. It waits for a gap in the playing and fills
+    // it with the last phrase, bent. The beat masher (all of the above)
+    // became Snares, an optional section of its own.
+    inline constexpr const char* answer       = "answer";      // how loud the answers are, 0 = never
+    inline constexpr const char* hunger       = "hunger";      // how soon and how often it answers
+    inline constexpr const char* mockery      = "mockery";     // how far an answer is bent
+    inline constexpr const char* space        = "space";       // the cave and the echoes
+    inline constexpr const char* heat         = "heat";        // saturation
+    inline constexpr const char* snares       = "snares";      // the beat masher on / off
+
+    inline constexpr const char* trickParrot    = "trickParrot";
+    inline constexpr const char* trickGhost     = "trickGhost";
+    inline constexpr const char* trickCloud     = "trickCloud";
+    inline constexpr const char* trickBackwards = "trickBackwards";
+    inline constexpr const char* trickDub       = "trickDub";
+    inline constexpr const char* trickMock      = "trickMock";
+    inline constexpr const char* trickHum       = "trickHum";
+    inline constexpr const char* trickRadio     = "trickRadio";
+
+    // In the order of mimic::Trick.
+    inline const char* const trickIds[] { trickParrot, trickGhost, trickCloud, trickBackwards, trickDub, trickMock, trickHum, trickRadio };
+    inline const juce::StringArray trickNames { "Parrot", "Ghost", "Cloud", "Backwards", "Dub", "Mock", "Hum", "Radio" };
+
     enum Loop { loopRepeat, loopEvolve };
     inline const juce::StringArray loopNames { "Same every pass", "New every pass" };
 

@@ -29,6 +29,16 @@ namespace mimic
                     set (id, juce::String (id) == ids::useEcho ? 0.0f : 1.0f);
             }
 
+            // Turns on only the listed answers.
+            void tricks (std::initializer_list<const char*> list)
+            {
+                for (auto* id : ids::trickIds)
+                    set (id, 0.0f);
+
+                for (auto* id : list)
+                    set (id, 1.0f);
+            }
+
             // Turns on only the listed fill contents.
             void only (std::initializer_list<const char*> contents)
             {
@@ -61,6 +71,7 @@ namespace mimic
             const char* tags;
             bool fill;
             std::function<void (Builder&)> build;
+            bool snaresOnly = true;   // the beat masher alone: Snares on, no answers
         };
 
         // fillEvery indices: 0 = 1 bar, 1 = 2, 2 = 4, 3 = 8, 4 = 16, 5 = 32.
@@ -69,7 +80,130 @@ namespace mimic
             using namespace ids;
 
             static const std::vector<Factory> presets {
-                { "Init", "wild, subtle", false, [] (Builder&) {} },
+                // The Mimic answers: it waits for a gap, then fills it.
+                { "Init", "answers", false, [] (Builder&) {}, false },
+
+                { "Polite Echo", "answers, subtle", false, [] (Builder& b)
+                {
+                    b.tricks ({ trickParrot, trickDub });
+                    b.set (hunger, 0.3f);
+                    b.set (mockery, 0.1f);
+                    b.set (space, 0.3f);
+                    b.set (heat, 0.15f);
+                }, false },
+
+                { "Parrot on the Shoulder", "answers, tape", false, [] (Builder& b)
+                {
+                    b.tricks ({ trickParrot, trickGhost, trickDub });
+                    b.set (hunger, 0.45f);
+                    b.set (mockery, 0.2f);
+                    b.set (space, 0.35f);
+                    b.set (heat, 0.3f);
+                }, false },
+
+                { "Ghost Choir", "answers, octaves, shimmer", false, [] (Builder& b)
+                {
+                    b.tricks ({ trickGhost, trickCloud, trickHum });
+                    b.set (hunger, 0.5f);
+                    b.set (mockery, 0.45f);
+                    b.set (space, 0.8f);
+                    b.set (heat, 0.1f);
+                }, false },
+
+                { "Swarm", "answers, granular", false, [] (Builder& b)
+                {
+                    b.tricks ({ trickCloud });
+                    b.set (hunger, 0.55f);
+                    b.set (mockery, 0.7f);
+                    b.set (space, 0.7f);
+                }, false },
+
+                { "Drone Keeper", "answers, drone, pads", false, [] (Builder& b)
+                {
+                    b.tricks ({ trickHum, trickCloud });
+                    b.set (hunger, 0.6f);
+                    b.set (mockery, 0.3f);
+                    b.set (space, 0.9f);
+                    b.set (heat, 0.1f);
+                }, false },
+
+                { "Dub Cellar", "answers, tape echo", false, [] (Builder& b)
+                {
+                    b.tricks ({ trickDub, trickParrot });
+                    b.set (hunger, 0.5f);
+                    b.set (mockery, 0.6f);
+                    b.set (space, 0.55f);
+                    b.set (heat, 0.5f);
+                }, false },
+
+                { "Backmasking", "answers, reverse, vocal", false, [] (Builder& b)
+                {
+                    b.tricks ({ trickBackwards, trickRadio, trickMock });
+                    b.set (hunger, 0.55f);
+                    b.set (mockery, 0.6f);
+                    b.set (space, 0.6f);
+                    b.set (heat, 0.3f);
+                }, false },
+
+                { "Voice in the Wall", "answers, lo-fi", false, [] (Builder& b)
+                {
+                    b.tricks ({ trickRadio, trickBackwards });
+                    b.set (hunger, 0.5f);
+                    b.set (mockery, 0.5f);
+                    b.set (space, 0.5f);
+                }, false },
+
+                { "Laughing Imp", "answers, mocking", false, [] (Builder& b)
+                {
+                    b.tricks ({ trickMock, trickRadio, trickParrot });
+                    b.set (hunger, 0.7f);
+                    b.set (mockery, 0.85f);
+                    b.set (space, 0.4f);
+                    b.set (heat, 0.35f);
+                }, false },
+
+                { "Answering Strings", "answers, guitar", false, [] (Builder& b)
+                {
+                    b.tricks ({ trickGhost, trickDub, trickCloud, trickBackwards });
+                    b.set (hunger, 0.5f);
+                    b.set (mockery, 0.3f);
+                    b.set (space, 0.6f);
+                    b.set (heat, 0.25f);
+                }, false },
+
+                { "Hungry Thing", "answers, wild", false, [] (Builder& b)
+                {
+                    b.set (hunger, 0.9f);
+                    b.set (mockery, 0.65f);
+                    b.set (space, 0.6f);
+                    b.set (heat, 0.4f);
+                }, false },
+
+                // Both: Snares chops the beat, the Mimic answers in the holes.
+                { "Breakcore Conversation", "answers, snares, wild", false, [] (Builder& b)
+                {
+                    b.set (snares, 1.0f);
+                    b.wild (0.45f, 0.6f);
+                    b.set (breaks, 0.4f);
+                    b.tricks ({ trickMock, trickRadio, trickDub });
+                    b.set (hunger, 0.8f);
+                    b.set (mockery, 0.7f);
+                    b.set (answer, 0.55f);
+                }, false },
+
+                { "Mild Snares, Kind Ghost", "answers, snares, subtle", false, [] (Builder& b)
+                {
+                    b.set (snares, 1.0f);
+                    b.wild (0.15f, 0.6f);
+                    b.only ({ useStutter, useRoll, useMash });
+                    b.tricks ({ trickGhost, trickParrot });
+                    b.set (hunger, 0.4f);
+                    b.set (mockery, 0.25f);
+                }, false },
+
+                // Snares alone (the beat masher), as it was before it
+                // learned to answer.
+                { "Snares Init", "snares, wild, subtle", false, [] (Builder&) {} },
 
                 // Fill machines: the track stays clean until the phrase ends.
                 { "Lurking Fill", "subtle, fill", true, [] (Builder& b)
@@ -171,46 +305,6 @@ namespace mimic
                     b.set (seed, 512.0f);
                 } },
 
-                { "Pumping Prey", "pumping, sidechain", false, [] (Builder& b)
-                {
-                    b.wild (0.8f, 0.6f);
-                    b.only ({});
-                    b.set (prey, preySidechain);
-                    b.set (shaper, 1.0f);
-                    b.set (shaperInvert, 1.0f);
-                    b.set (filter, 0.0f);
-                    b.set (slicer, 0.0f);
-                } },
-
-                { "Brightness Thief", "filtered, sidechain", false, [] (Builder& b)
-                {
-                    b.wild (0.8f, 0.6f);
-                    b.only ({});
-                    b.set (prey, preySidechain);
-                    b.set (filter, 1.0f);
-                    b.set (shaper, 0.4f);
-                    b.set (slicer, 0.0f);
-                } },
-
-                { "Copycat Chop", "choppy, sidechain", false, [] (Builder& b)
-                {
-                    b.wild (0.7f, 0.6f);
-                    b.only ({ useStutter });
-                    b.set (prey, preySidechain);
-                    b.set (slicer, 1.0f);
-                    b.set (shaper, 0.5f);
-                } },
-
-                { "Puppet Strings", "pitched, midi", false, [] (Builder& b)
-                {
-                    b.wild (0.6f, 0.6f);
-                    b.only ({ useStutter });
-                    b.set (prey, preyMidi);
-                    b.set (pitcher, 1.0f);
-                    b.set (slicer, 0.8f);
-                    b.set (shaper, 0.6f);
-                } },
-
                 // v0.2
                 { "Dub Throw", "echo, subtle, fill", true, [] (Builder& b)
                 {
@@ -298,41 +392,6 @@ namespace mimic
                     b.set (seed, 99.0f);
                 } },
 
-                // v0.6 teeth. The track speaks with the voice at PREY IN.
-                { "Ventriloquist", "vocoder, sidechain", false, [] (Builder& b)
-                {
-                    b.wild (0.15f, 0.6f);
-                    b.set (prey, preySidechain);
-                    b.set (voice, 0.85f);
-                } },
-
-                // The track steps aside, band by band, wherever the prey sings.
-                { "Carved Out", "ducking, sidechain", false, [] (Builder& b)
-                {
-                    b.wild (0.1f, 0.6f);
-                    b.set (prey, preySidechain);
-                    b.set (voice, 1.0f);
-                    b.set (voiceInvert, 1.0f);
-                } },
-
-                // The track's own hits set the Mimic off.
-                { "Possessed", "possessed, wild", false, [] (Builder& b)
-                {
-                    b.wild (0.1f, 0.6f);
-                    b.only ({ useMash, useStutter, useRoll, useReverse, useTape });
-                    b.set (possess, 0.6f);
-                    b.set (seed, 13.0f);
-                } },
-
-                // No pattern at all: every MIDI note fires an event.
-                { "Puppet Master", "possessed, midi", false, [] (Builder& b)
-                {
-                    b.wild (0.0f, 0.6f);
-                    b.only ({ useStutter, useRoll, useReverse, useTape, useGrains });
-                    b.set (prey, preyMidi);
-                    b.set (possess, 1.0f);
-                } },
-
                 // v0.7: the granular delay, with each material's own
                 // versions (shards on a melody, fog on pads) and dynamics.
                 { "Dissolving Echoes", "echo, granular", false, [] (Builder& b)
@@ -358,7 +417,7 @@ namespace mimic
             juce::Array<Info> list;
 
             for (auto& p : factoryPresets())
-                list.add ({ p.name, p.tags, p.fill });
+                list.add ({ p.name, p.tags, p.fill, ! p.snaresOnly });
 
             return list;
         }();
@@ -391,6 +450,13 @@ namespace mimic
 
         resetToDefaults();
         Builder builder { state };
+
+        if (presets[(size_t) index].snaresOnly)
+        {
+            builder.set (ids::snares, 1.0f);
+            builder.set (ids::answer, 0.0f);
+        }
+
         presets[(size_t) index].build (builder);
         setName (presets[(size_t) index].name);
     }

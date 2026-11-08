@@ -138,6 +138,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
     toggle (ids::useEcho, "Echo", false);
     add (ids::dynamics, "Dynamics", { 0.0f, 1.0f }, 0.0f, percent);
 
+    add (ids::answer, "Answer", { 0.0f, 1.0f }, 0.7f, percent);
+    add (ids::hunger, "Hunger", { 0.0f, 1.0f }, 0.5f, percent);
+    add (ids::mockery, "Mockery", { 0.0f, 1.0f }, 0.35f, percent);
+    add (ids::space, "Space", { 0.0f, 1.0f }, 0.45f, percent);
+    add (ids::heat, "Heat", { 0.0f, 1.0f }, 0.2f, percent);
+    toggle (ids::snares, "Snares", false);
+
+    for (int t = 0; t < numTricks; ++t)
+        toggle (ids::trickIds[t], ids::trickNames[t].toRawUTF8(), true);
+
     return layout;
 }
 
@@ -168,6 +178,15 @@ void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     now = 0;
 
     history.prepare (sr, 24.0);
+    answerer.prepare (sr, samplesPerBlock);
+    {
+        const auto size = (size_t) juce::jmax (samplesPerBlock, 4096);
+        dryCopyL.assign (size, 0.0f);
+        dryCopyR.assign (size, 0.0f);
+        answerL.assign (size, 0.0f);
+        answerR.assign (size, 0.0f);
+    }
+    levelMeter = 0.0f;
     mainOnsets.reset();
     mainDetector.prepare (sr);
     preyDetector.prepare (sr);
@@ -181,7 +200,7 @@ void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     echoAlive = 0;
     echoRamp = 1.0f / (float) (0.005 * sr);
     restDuck = 1.0f;
-    restDuckCoeff = coeff (0.003, sr);
+    restDuckCoeff = 1.0f / (float) (0.008 * sr);   // the whole way in 8 ms
     chopAt = possessAt = -1.0;
     voiceMix = 0.0f;
     voiceStep = coeff (0.01, sr);
@@ -250,6 +269,7 @@ void MimicProcessor::discontinuity()
     player.beginPass (now);
     player.setValidFrom (now);
     segmentIndex = -1;
+    earlyRestIndex = -1;
     possessEnd = -1;
     chopAt = possessAt = -1.0;
     spanKey = std::numeric_limits<int64_t>::min();
@@ -348,8 +368,27 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         }
     }
 
-    // Parameters, once per block.
-    const bool wild = choice (ids::mode) == ids::modeWild;
+    // The dry track, for the answers to listen to.
+    {
+        if ((size_t) numSamples > dryCopyL.size())
+        {
+            // A host breaking its promise on the block size.
+            dryCopyL.resize ((size_t) numSamples);
+            dryCopyR.resize ((size_t) numSamples);
+            answerL.resize ((size_t) numSamples);
+            answerR.resize ((size_t) numSamples);
+        }
+
+        const float* l = main.getReadPointer (0);
+        const float* r = main.getReadPointer (juce::jmin (1, numCh - 1));
+        std::copy (l, l + numSamples, dryCopyL.begin());
+        std::copy (r, r + numSamples, dryCopyR.begin());
+    }
+
+    // Parameters, once per block. Snares (the beat masher) only works when
+    // it is switched on; off, everything it does rests.
+    const bool snares = flag (ids::snares);
+    const bool wild = snares && choice (ids::mode) == ids::modeWild;
     const float bite = value (ids::bite);
     const float speed = value (ids::speed);
     const float mix = value (ids::mix);
@@ -362,7 +401,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     const bool replace = flag (ids::replace);
     const float anticipation = value (ids::anticipation);
     const bool escalate = flag (ids::escalate);
-    const float lure = value (ids::lure);
+    const float lure = snares ? value (ids::lure) : 0.0f;
     const bool keep = flag (ids::keep);
     const int triggerNote = (int) value (ids::triggerNote);
     const int preySource = choice (ids::prey);
@@ -460,6 +499,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     transportPlaying.store (playing, std::memory_order_relaxed);
 
     const double ppqPerSample = bpm / 60.0 / sr;
+    const double preFade = 0.006 * bpm / 60.0;   // 6 ms, in ppq
     const double spq = 1.0 / ppqPerSample;
     const double barLen = numerator * 4.0 / denominator;
     const double beatLen = 4.0 / denominator;
@@ -577,7 +617,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
             if (msg.isNoteOn())
             {
-                if (msg.getNoteNumber() == triggerNote)
+                if (msg.getNoteNumber() == triggerNote && snares)
                 {
                     manualActive = true;
                     manualStart = tl;
@@ -704,7 +744,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             sLength = barLen;
             haveSpan = true;
         }
-        else if (playing)
+        else if (playing && snares)
         {
             const int64_t group = floorDiv (phraseBar, every);
             const int64_t barInGroup = phraseBar - group * every;
@@ -765,6 +805,24 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             lastFillKey = key;
 
+            // Breaks start a few ms early, so their fade-out is over by the
+            // grid line and the cut is clean and on time.
+            auto findNextRest = [&] (double after)
+            {
+                earlyRestIndex = -1;
+
+                for (int k = 0; k < script.count; ++k)
+                {
+                    const auto& rs = script.segments[(size_t) k];
+
+                    if (rs.kind == Kind::rest && rs.start > after + 1.0e-9 && (earlyRestIndex < 0 || rs.start < earlyRestAt))
+                    {
+                        earlyRestIndex = k;
+                        earlyRestAt = rs.start;
+                    }
+                }
+            };
+
             if (key != spanKey || rewrite)
             {
                 g.span = sLength;
@@ -782,18 +840,31 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
                     segmentIndex = playingIndex;
 
                 rewrite = false;
+                findNextRest (tl - spanStart - preFade - 1.0e-9);
             }
 
             const double pos = tl - spanStart;
-            const auto* seg = segmentIndex >= 0 && segmentIndex < script.count ? &script.segments[(size_t) segmentIndex] : nullptr;
 
-            if (! possessed && (seg == nullptr || pos < seg->start - 1.0e-9 || pos >= seg->start + seg->length - 1.0e-9))
+            if (! possessed && earlyRestIndex >= 0 && earlyRestIndex != segmentIndex
+                && pos >= earlyRestAt - preFade && pos < earlyRestAt)
+            {
+                segmentIndex = earlyRestIndex;
+                const auto& rs = script.segments[(size_t) segmentIndex];
+                player.begin (rs, now, spq, (int64_t) ((rs.start + rs.length - pos) * spq));
+                findNextRest (rs.start);
+            }
+
+            const auto* seg = segmentIndex >= 0 && segmentIndex < script.count ? &script.segments[(size_t) segmentIndex] : nullptr;
+            const double early = seg != nullptr && seg->kind == Kind::rest ? preFade : 0.0;
+
+            if (! possessed && (seg == nullptr || pos < seg->start - early - 1.0e-9 || pos >= seg->start + seg->length - 1.0e-9))
             {
                 const int index = script.find (pos);
 
                 if (index != segmentIndex)
                 {
                     segmentIndex = index;
+                    findNextRest (pos);
 
                     if (index >= 0)
                     {
@@ -910,7 +981,10 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
         // The echoes (granular delay and reverb throw) duck in a Break, so
         // the hole is heard.
-        restDuck += restDuckCoeff * ((1.0f - 0.95f * juce::jmin (1.0f, weights.rest) * engage) - restDuck);
+        {
+            const float duckTarget = 1.0f - 0.95f * juce::jmin (1.0f, weights.rest) * engage;
+            restDuck += juce::jlimit (-restDuckCoeff, restDuckCoeff, duckTarget - restDuck);
+        }
 
         // Echo: while an echo segment plays, the track is sent into the
         // granular delay; its repeats ring on after it.
@@ -1079,7 +1153,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
         // How much of the output is the Mimic. In Fill mode, between fills,
         // this is exactly 0 and the track passes untouched.
-        const bool engaged = wild || inFill || antProgress > 0.0f || lure > 0.001f;
+        const bool engaged = snares && (wild || inFill || antProgress > 0.0f || lure > 0.001f);
         engage = engaged ? juce::jmin (1.0f, engage + engageStep) : juce::jmax (0.0f, engage - engageStep);
         mixSmoothed += 0.002f * ((wild ? mix : 1.0f) - mixSmoothed);
 
@@ -1146,6 +1220,61 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     if (sendCount > 0)
         flushThrow (left, right, sendStart, sendCount, throwReturn * outGain);
+
+    // The answers: they listen to the dry track and are laid over the top.
+    {
+        AnswerSettings as;
+        as.level = value (ids::answer);
+        as.hunger = value (ids::hunger);
+        as.mockery = value (ids::mockery);
+        as.space = value (ids::space);
+        as.heat = value (ids::heat);
+        as.enabled = 0;
+
+        for (int t = 0; t < numTricks; ++t)
+            if (flag (ids::trickIds[t]))
+                as.enabled |= 1u << t;
+
+        as.material = g.material;
+        as.seed = (uint32_t) seedValue;
+        as.samplesPerBeat = spq;
+        as.playing = playing;
+        as.ppq = base;
+        as.ppqPerSample = ppqPerSample;
+
+        // It always listens, so it knows the phrase when it is turned up.
+        std::fill (answerL.begin(), answerL.begin() + numSamples, 0.0f);
+        std::fill (answerR.begin(), answerR.begin() + numSamples, 0.0f);
+        answerer.process (dryCopyL.data(), dryCopyR.data(), answerL.data(), answerR.data(), numSamples, as);
+
+        if (as.level > 0.0f || answerer.busy())
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                if (right != nullptr)
+                {
+                    left[i] += answerL[(size_t) i] * outGain;
+                    right[i] += answerR[(size_t) i] * outGain;
+                }
+                else
+                {
+                    left[i] += 0.5f * (answerL[(size_t) i] + answerR[(size_t) i]) * outGain;
+                }
+            }
+        }
+
+        answerStateOut.store ((int) answerer.state(), std::memory_order_relaxed);
+        answerTrickOut.store (answerer.trick(), std::memory_order_relaxed);
+        answerWaitOut.store (answerer.waitProgress(), std::memory_order_relaxed);
+        answerProgressOut.store (answerer.answerProgress(), std::memory_order_relaxed);
+        answerCountOut.store (answerer.answers(), std::memory_order_relaxed);
+
+        float peak = 0.0f;
+        for (int i = 0; i < numSamples; ++i)
+            peak = juce::jmax (peak, std::abs (dryCopyL[(size_t) i]), std::abs (dryCopyR[(size_t) i]));
+        levelMeter = juce::jmax (peak, levelMeter * 0.85f);
+        inputLevelOut.store (levelMeter, std::memory_order_relaxed);
+    }
 
     throwFlash *= 0.8f;
     throwOut.store (throwFlash, std::memory_order_relaxed);
