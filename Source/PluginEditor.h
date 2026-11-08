@@ -11,6 +11,39 @@
 //   IT ANSWERS  Hunger and Mockery, the space and heat, and its tricks
 //   SNARES      the beat masher, off until switched on: mild to wild
 // ADVANCED opens a drawer below with the rest of Snares and the output.
+// The preset browser, as in the Stalker: the preset's name is a sound
+// effect (poison-green capitals, inked, with a purple then black drop
+// shadow); the arrows and SAVE are inked boxes leaning forward. The
+// editor tilts the whole bar.
+class MimicSfxButton : public juce::Button
+{
+public:
+    enum class Kind { previous, next, name, save };
+    MimicSfxButton (Kind k, juce::Typeface::Ptr face) : juce::Button ({}), kind (k), bangers (face) {}
+    void paintButton (juce::Graphics&, bool isHighlighted, bool isDown) override;
+
+private:
+    const Kind kind;
+    juce::Typeface::Ptr bangers;
+};
+
+class MimicPresetBar : public juce::Component
+{
+public:
+    MimicPresetBar (mimic::PresetManager&, juce::Typeface::Ptr bangers);
+    void resized() override;
+    void refresh();
+    std::function<void()> onPresetsChanged;
+
+private:
+    void showMenu();
+    void showSaveDialog();
+
+    mimic::PresetManager& presets;
+    juce::Typeface::Ptr bangersFace;
+    MimicSfxButton previous, next, name, save;
+};
+
 class MimicEditor : public juce::AudioProcessorEditor,
                     public juce::Timer
 {
@@ -38,7 +71,7 @@ private:
         juce::Font getComboBoxFont (juce::ComboBox&) override;
         juce::Font getLabelFont (juce::Label&) override;
         juce::Font getPopupMenuFont() override;
-        juce::Typeface::Ptr bangers, typewriter, eater;
+        juce::Typeface::Ptr bangers, typewriter, eater, metal;
     };
 
     struct Knob
@@ -71,7 +104,6 @@ private:
     void setUpKnob (juce::Component& parent, Knob&, const char* id, const juce::String& name, bool textBox);
     void setUpPick (juce::Component& parent, Pick&, const char* id, const juce::String& name);
     void setUpSwitch (juce::Component& parent, Switch&, const char* id, const juce::String& name, bool chip);
-    void refreshPresets();
     void showAdvanced (bool);
     void updateModeControls();
     void updateSnaresLook();
@@ -99,8 +131,8 @@ private:
     Drawer stage;
 
     // Header.
-    juce::ComboBox presetBox;
-    juce::TextButton previous { "<" }, next { ">" }, save { "SAVE" }, advancedButton { "ADVANCED" };
+    std::unique_ptr<MimicPresetBar> presetBar;
+    juce::TextButton advancedButton { "ADVANCED" };
 
     // IT LISTENS: what the track is (you say), its timing.
     juce::ComboBox materialBox;

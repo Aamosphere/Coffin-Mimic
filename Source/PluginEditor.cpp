@@ -5,19 +5,23 @@ using namespace mimic;
 
 namespace
 {
-    const juce::Colour ink       { 0xff0b0605 };
-    const juce::Colour panel     { 0xff1c110c };
-    const juce::Colour edge      { 0xff3a2a1c };
-    const juce::Colour gold      { 0xffc9962e };
-    const juce::Colour goldLight { 0xffe8b84a };
-    const juce::Colour red       { 0xffc0281e };
-    const juce::Colour redBright { 0xffe0352a };
-    const juce::Colour bone      { 0xfff1e6bf };
-    const juce::Colour dim       { 0xffb9a98a };
-    const juce::Colour wood      { 0xff6b3d1c };
-    const juce::Colour woodLid   { 0xff7d4722 };
-    const juce::Colour woodLine  { 0xff4a2810 };
-    const juce::Colour mouth     { 0xff2a0507 };
+    // The poison comic: black ink, bruise purple, poison green, paper.
+    const juce::Colour ink          { 0xff000000 };
+    const juce::Colour panel        { 0xff1a0a28 };
+    const juce::Colour panelHi      { 0xff22102f };
+    const juce::Colour edge         { 0xff3a2a4a };
+    const juce::Colour green        { 0xffa6f04a };
+    const juce::Colour greenLight   { 0xffbef870 };
+    const juce::Colour purple       { 0xff7a2aa0 };
+    const juce::Colour purpleBright { 0xffb06cff };
+    const juce::Colour bone         { 0xfff2eedc };
+    const juce::Colour dim          { 0xffa898c0 };
+    const juce::Colour chipOff      { 0xff1c0e28 };
+    const juce::Colour spineGold    { 0xffc9962e };
+    const juce::Colour wood         { 0xff3b2a21 };
+    const juce::Colour woodLid      { 0xff4a3326 };
+    const juce::Colour brass        { 0xff8a7a5a };
+    const juce::Colour moon         { 0xffe6e0f0 };
 
     // One name per mimic::Kind, in its order.
     const char* const shortKindNames[] { "", "STU", "ROLL", "REV", "SCAT", "TAPE", "GATE", "GRN", "", "MASH",
@@ -59,8 +63,6 @@ namespace
         juce::Colour (0xff5a8ae0), juce::Colour (0xffe0352a), juce::Colour (0xffc8a070), juce::Colour (0xffb0b0a0)
     };
 
-    // Where the chest is drawn; its drawing is in a 500 x 450 box, scaled.
-    constexpr float chestX = 26.0f, chestY = 100.0f, chestScale = 0.56f;
 
     juce::Font font (const juce::Typeface::Ptr& face, float height)
     {
@@ -83,21 +85,6 @@ namespace
         return p;
     }
 
-    // A row of fangs along y = 0, pointing up (sign -1) or down (+1).
-    juce::Path fangs (float sign)
-    {
-        juce::Path p;
-        p.startNewSubPath (78.0f, 0.0f);
-        const float xs[] { 94, 110, 126, 142, 158, 174, 190, 206, 222, 238, 262, 278, 294, 310, 326, 342, 358, 374, 390, 406, 422 };
-        const float hs[] { 22, 0, 22, 0, 26, 0, 22, 0, 22, 0, 0, 22, 0, 22, 0, 26, 0, 22, 0, 22, 0 };
-
-        for (size_t i = 0; i < std::size (xs); ++i)
-            p.lineTo (xs[i], sign * hs[i]);
-
-        p.closeSubPath();
-        return p;
-    }
-
     void arc (juce::Graphics& g, juce::Point<float> c, float r, float a0, float a1, float width, juce::Colour colour)
     {
         juce::Path p;
@@ -113,27 +100,28 @@ MimicEditor::Look::Look()
     bangers = juce::Typeface::createSystemTypefaceFor (BinaryData::BangersRegular_ttf, BinaryData::BangersRegular_ttfSize);
     typewriter = juce::Typeface::createSystemTypefaceFor (BinaryData::SpecialEliteRegular_ttf, BinaryData::SpecialEliteRegular_ttfSize);
     eater = juce::Typeface::createSystemTypefaceFor (BinaryData::EaterRegular_ttf, BinaryData::EaterRegular_ttfSize);
+    metal = juce::Typeface::createSystemTypefaceFor (BinaryData::MetalManiaRegular_ttf, BinaryData::MetalManiaRegular_ttfSize);
 
     setColour (juce::Label::textColourId, bone);
     setColour (juce::Slider::textBoxTextColourId, bone);
     setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
     setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
-    setColour (juce::ComboBox::backgroundColourId, panel);
-    setColour (juce::ComboBox::outlineColourId, gold);
-    setColour (juce::ComboBox::textColourId, bone);
-    setColour (juce::ComboBox::arrowColourId, goldLight);
+    setColour (juce::ComboBox::backgroundColourId, bone);
+    setColour (juce::ComboBox::outlineColourId, ink);
+    setColour (juce::ComboBox::textColourId, ink);
+    setColour (juce::ComboBox::arrowColourId, ink);
     setColour (juce::PopupMenu::backgroundColourId, panel);
     setColour (juce::PopupMenu::textColourId, bone);
-    setColour (juce::PopupMenu::highlightedBackgroundColourId, red);
-    setColour (juce::PopupMenu::headerTextColourId, goldLight);
+    setColour (juce::PopupMenu::highlightedBackgroundColourId, purple);
+    setColour (juce::PopupMenu::headerTextColourId, greenLight);
     setColour (juce::ToggleButton::textColourId, bone);
-    setColour (juce::ToggleButton::tickColourId, goldLight);
+    setColour (juce::ToggleButton::tickColourId, greenLight);
     setColour (juce::ToggleButton::tickDisabledColourId, dim);
-    setColour (juce::TextButton::textColourOffId, goldLight);
+    setColour (juce::TextButton::textColourOffId, greenLight);
     setColour (juce::TextButton::textColourOnId, bone);
     setColour (juce::TooltipWindow::backgroundColourId, panel);
     setColour (juce::TooltipWindow::textColourId, bone);
-    setColour (juce::TooltipWindow::outlineColourId, gold);
+    setColour (juce::TooltipWindow::outlineColourId, green);
     setColour (juce::AlertWindow::backgroundColourId, panel);
     setColour (juce::AlertWindow::textColourId, bone);
     setColour (juce::TextEditor::backgroundColourId, ink);
@@ -144,106 +132,82 @@ MimicEditor::Look::Look()
 void MimicEditor::Look::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
                                           float start, float end, juce::Slider& slider)
 {
+    // Every knob is drawn in ink, like a comic panel: a black disc with a
+    // poison-green arc, a paper cap and a black needle, and a hard shadow.
     const auto area = juce::Rectangle<int> (x, y, w, h).toFloat();
     const auto c = area.getCentre();
     const float angle = start + pos * (end - start);
+    const float R = juce::jmin (area.getWidth(), area.getHeight()) * 0.5f - 4.0f;
+    const bool lock = slider.getName() == "bite";
+    const float line = R > 40.0f ? 4.0f : 3.0f;
+    const float shadow = R > 40.0f ? 5.0f : 3.0f;
+    const auto disc = juce::Rectangle<float> (2 * R, 2 * R).withCentre (c);
 
-    if (slider.getName() == "bite")
-    {
-        // The lock plate: a gold medallion with a keyhole.
-        const float R = juce::jmin (area.getWidth(), area.getHeight()) * 0.5f - 3.0f;
-        g.setColour (ink.withAlpha (0.5f));
-        g.fillEllipse (juce::Rectangle<float> (2 * R + 4, 2 * R + 4).withCentre (c.translated (0, 6)));
-        g.setColour (gold);
-        g.fillEllipse (juce::Rectangle<float> (2 * R, 2 * R).withCentre (c));
-        g.setColour (ink);
-        g.drawEllipse (juce::Rectangle<float> (2 * R, 2 * R).withCentre (c), 5.0f);
-        g.setColour (panel);
-        g.fillEllipse (juce::Rectangle<float> (2 * (R - 12), 2 * (R - 12)).withCentre (c));
-        arc (g, c, R - 24, start, end, 10.0f, edge);
-        arc (g, c, R - 24, start, juce::jmax (start + 0.01f, angle), 10.0f, redBright);
-        g.setColour (juce::Colour (0xff2a1a10));
-        g.fillEllipse (juce::Rectangle<float> (2 * (R - 38), 2 * (R - 38)).withCentre (c));
-        g.setColour (gold);
-        g.drawEllipse (juce::Rectangle<float> (2 * (R - 38), 2 * (R - 38)).withCentre (c), 3.0f);
+    g.setColour (ink);
+    g.fillEllipse (disc.translated (shadow, shadow));
+    g.fillEllipse (disc);
 
-        juce::Path pointer;
-        pointer.addTriangle (c.x, c.y - (R - 42), c.x + 8, c.y - (R - 66), c.x - 8, c.y - (R - 66));
-        g.setColour (bone);
-        g.fillPath (pointer, juce::AffineTransform::rotation (angle, c.x, c.y));
+    const float thick = R * 0.26f;
+    const float arcR = R - line - thick * 0.5f;
+    arc (g, c, arcR, start, end, thick, edge);
+    arc (g, c, arcR, start, juce::jmax (start + 0.01f, angle), thick, green);
 
-        g.setColour (ink);
-        g.fillEllipse (juce::Rectangle<float> (18, 18).withCentre (c.translated (0, -8)));
-        g.fillPath (zigzag ({ { c.x - 5, c.y - 4 }, { c.x + 5, c.y - 4 }, { c.x + 8, c.y + 20 }, { c.x - 8, c.y + 20 } }));
-        return;
-    }
-
-    if (slider.getName() == "big")
-    {
-        // The answer knobs: a heavy bronze ring around a red arc.
-        const float R = juce::jmin (area.getWidth(), area.getHeight()) * 0.5f - 3.0f;
-        g.setColour (ink.withAlpha (0.5f));
-        g.fillEllipse (juce::Rectangle<float> (2 * R + 4, 2 * R + 4).withCentre (c.translated (0, 4)));
-        g.setColour (gold);
-        g.fillEllipse (juce::Rectangle<float> (2 * R, 2 * R).withCentre (c));
-        g.setColour (ink);
-        g.drawEllipse (juce::Rectangle<float> (2 * R, 2 * R).withCentre (c), 3.5f);
-        g.setColour (panel);
-        g.fillEllipse (juce::Rectangle<float> (2 * (R - 9), 2 * (R - 9)).withCentre (c));
-        arc (g, c, R - 18, start, end, 7.0f, edge);
-        arc (g, c, R - 18, start, juce::jmax (start + 0.01f, angle), 7.0f, redBright);
-        g.setColour (juce::Colour (0xff2a1a10));
-        g.fillEllipse (juce::Rectangle<float> (2 * (R - 28), 2 * (R - 28)).withCentre (c));
-        g.setColour (bone);
-        g.drawLine (juce::Line<float> (c.getPointOnCircumference (R - 46, angle), c.getPointOnCircumference (R - 30, angle)), 4.0f);
-        return;
-    }
-
-    // Small gold-rimmed knobs.
-    const float r = juce::jmin (area.getWidth(), area.getHeight()) * 0.5f - 4.0f;
-    g.setColour (juce::Colour (0xff2a1a10));
-    g.fillEllipse (juce::Rectangle<float> (2 * r, 2 * r).withCentre (c));
-    g.setColour (gold);
-    g.drawEllipse (juce::Rectangle<float> (2 * r, 2 * r).withCentre (c), 2.5f);
-    arc (g, c, r - 6, start, end, 4.0f, edge);
-    arc (g, c, r - 6, start, juce::jmax (start + 0.01f, angle), 4.0f, goldLight);
+    const float capR = R * 0.56f;
+    const auto cap = juce::Rectangle<float> (2 * capR, 2 * capR).withCentre (c);
     g.setColour (bone);
-    g.drawLine (juce::Line<float> (c, c.getPointOnCircumference (r - 9, angle)), 3.0f);
-}
+    g.fillEllipse (cap);
+    g.setColour (ink);
+    g.drawEllipse (cap, line);
 
+    if (lock)
+    {
+        // Mild to wild is the coffin's lock: a keyhole in the cap.
+        g.fillEllipse (juce::Rectangle<float> (capR * 0.42f, capR * 0.42f).withCentre (c.translated (0, -capR * 0.16f)));
+        g.fillPath (zigzag ({ { c.x - capR * 0.1f, c.y - capR * 0.05f }, { c.x + capR * 0.1f, c.y - capR * 0.05f },
+                              { c.x + capR * 0.17f, c.y + capR * 0.45f }, { c.x - capR * 0.17f, c.y + capR * 0.45f } }));
+    }
+
+    // The needle reaches from the cap's edge onto the arc.
+    g.setColour (ink);
+    g.drawLine (juce::Line<float> (c.getPointOnCircumference (lock ? capR * 0.7f : capR * 0.15f, angle),
+                                   c.getPointOnCircumference (R - line, angle)), R > 40.0f ? 5.0f : 3.5f);
+}
 void MimicEditor::Look::drawToggleButton (juce::Graphics& g, juce::ToggleButton& b, bool highlighted, bool)
 {
     if (! (bool) b.getProperties()["chip"])
     {
         // Small checkbox with label.
         const auto box = juce::Rectangle<float> (2.0f, (float) b.getHeight() * 0.5f - 8.0f, 16.0f, 16.0f);
-        g.setColour (panel);
-        g.fillRoundedRectangle (box, 3.0f);
-        g.setColour (b.getToggleState() ? goldLight : edge.brighter (0.4f));
-        g.drawRoundedRectangle (box, 3.0f, 1.5f);
-
-        if (b.getToggleState())
-            g.fillRoundedRectangle (box.reduced (4.0f), 1.5f);
-
-        // The teeth's narrow Flip switches get a smaller label.
-        const bool narrow = b.getWidth() < 64;
+        g.setColour (ink);
+        g.fillRect (box.translated (2.0f, 2.0f));
+        g.setColour (b.getToggleState() ? green : chipOff);
+        g.fillRect (box);
+        g.setColour (ink);
+        g.drawRect (box, 2.0f);
         g.setColour (highlighted ? bone : dim);
-        g.setFont (font (typewriter, narrow ? 11.0f : 13.0f));
-        g.drawText (b.getButtonText(), narrow ? 21 : 24, 0, b.getWidth() - (narrow ? 21 : 24), b.getHeight(), juce::Justification::centredLeft);
+        g.setFont (font (typewriter, 13.0f));
+        g.drawText (b.getButtonText(), 24, 0, b.getWidth() - 24, b.getHeight(), juce::Justification::centredLeft);
         return;
     }
 
-    // Chips: gold when on; red-rimmed while that one is playing. A chip can
-    // carry a small second line (what the switch is called when the track's
-    // material turns it into its own version).
-    const auto r = b.getLocalBounds().toFloat().reduced (1.0f);
+    // Chips: inked boxes. On: poison green with a hard shadow. While that
+    // one plays: a purple rim. A small second line names what the switch
+    // turns into on this material.
+    const auto r = b.getLocalBounds().toFloat().reduced (1.5f).withTrimmedRight (2.0f).withTrimmedBottom (2.0f);
     const bool on = b.getToggleState();
     const bool lit = (bool) b.getProperties()["lit"];
     const juce::String sub = b.getProperties()["sub"].toString();
-    g.setColour (on ? gold : panel);
-    g.fillRoundedRectangle (r, 5.0f);
-    g.setColour (lit ? redBright : (on ? goldLight : (highlighted ? gold : edge.brighter (0.3f))));
-    g.drawRoundedRectangle (r, 5.0f, lit ? 3.0f : 1.5f);
+
+    if (on)
+    {
+        g.setColour (ink);
+        g.fillRect (r.translated (3.0f, 3.0f));
+    }
+
+    g.setColour (on ? (highlighted ? greenLight : green) : (highlighted ? panelHi : chipOff));
+    g.fillRect (r);
+    g.setColour (lit ? purpleBright : ink);
+    g.drawRect (r, lit ? 4.0f : 3.0f);
     g.setColour (on ? ink : dim);
 
     if (sub.isNotEmpty())
@@ -255,47 +219,36 @@ void MimicEditor::Look::drawToggleButton (juce::Graphics& g, juce::ToggleButton&
     }
     else
     {
-        g.setFont (font (bangers, juce::jmin (16.0f, r.getHeight() * 0.56f)));
+        g.setFont (font (bangers, juce::jmin (17.0f, r.getHeight() * 0.58f)));
         g.drawText (b.getButtonText().toUpperCase(), r, juce::Justification::centred);
     }
 }
-
 void MimicEditor::Look::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool highlighted, bool down)
 {
-    const auto r = b.getLocalBounds().toFloat().reduced (1.5f);
+    const auto r = b.getLocalBounds().toFloat().reduced (1.5f).withTrimmedRight (3.0f).withTrimmedBottom (3.0f);
     const juce::String style = b.getProperties()["style"].toString();
-    juce::Colour fill = panel;
-
-    if (style == "gold")
-        fill = highlighted ? goldLight : gold;
-    else if (b.getToggleState())
-        fill = red;
-    else if (highlighted)
-        fill = panel.brighter (0.15f);
-
-    if (down)
-        fill = fill.darker (0.2f);
-
-    g.setColour (fill);
-    g.fillRoundedRectangle (r, 6.0f);
+    const float press = down ? 2.0f : 0.0f;
 
     if (style == "dashed")
     {
         juce::Path outline;
-        outline.addRoundedRectangle (r, 6.0f);
-        const float dashes[] { 6.0f, 4.0f };
+        outline.addRectangle (r);
+        const float dashes[] { 7.0f, 5.0f };
         juce::Path dashed;
-        juce::PathStrokeType (2.0f).createDashedStroke (dashed, outline, dashes, 2);
-        g.setColour (gold);
+        juce::PathStrokeType (3.0f).createDashedStroke (dashed, outline, dashes, 2);
+        g.setColour (highlighted ? greenLight : green);
         g.fillPath (dashed);
+        return;
     }
-    else if (style != "gold")
-    {
-        g.setColour (gold);
-        g.drawRoundedRectangle (r, 6.0f, 2.0f);
-    }
-}
 
+    // Inked boxes with a hard shadow; on: bruise purple.
+    g.setColour (ink);
+    g.fillRect (r.translated (3.0f, 3.0f));
+    g.setColour (b.getToggleState() ? purple : (highlighted ? panelHi : chipOff));
+    g.fillRect (r.translated (press, press));
+    g.setColour (ink);
+    g.drawRect (r.translated (press, press), 3.0f);
+}
 juce::Font MimicEditor::Look::getTextButtonFont (juce::TextButton&, int height)
 {
     return font (bangers, juce::jmin (26.0f, (float) height * 0.55f));
@@ -323,7 +276,7 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     materialBox.setTooltip ("What the track this Mimic sits on is. It changes what the Mimic does: a voice gets ghosts and backmasking, "
                             "a guitar octaves and echoes, chords clouds and drones, drums mocking stutters and tape tricks.");
     materialLabel.setText ("YOUR TRACK IS", juce::dontSendNotification);
-    materialLabel.setColour (juce::Label::textColourId, goldLight);
+    materialLabel.setColour (juce::Label::textColourId, greenLight);
     materialLabel.setFont (font (look.bangers, 16.0f));
     materialLabel.setBorderSize ({});
     stage.addAndMakeVisible (materialLabel);
@@ -441,44 +394,8 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     advancedButton.getProperties().set ("style", "dashed");
     advancedButton.onClick = [this] { showAdvanced (! drawer.isVisible()); };
 
-    stage.addAndMakeVisible (presetBox);
-    presetBox.onChange = [this]
-    {
-        const int id = presetBox.getSelectedId();
-        const auto& factory = PresetManager::getFactory();
-
-        if (id > 0 && id <= factory.size())
-            mimicProcessor.presets.loadFactory (id - 1);
-        else if (id > 1000)
-        {
-            const auto user = mimicProcessor.presets.getUserPresets();
-
-            if (juce::isPositiveAndBelow (id - 1001, user.size()))
-                mimicProcessor.presets.loadUser (user[id - 1001]);
-        }
-    };
-
-    for (auto* b : { &previous, &next, &save })
-        stage.addAndMakeVisible (*b);
-
-    save.getProperties().set ("style", "gold");
-    save.setColour (juce::TextButton::textColourOffId, ink);
-    previous.onClick = [this] { mimicProcessor.presets.step (-1); };
-    next.onClick = [this] { mimicProcessor.presets.step (1); };
-    save.onClick = [this]
-    {
-        auto* window = new juce::AlertWindow ("Save preset", "Name the preset:", juce::MessageBoxIconType::NoIcon, this);
-        window->addTextEditor ("name", mimicProcessor.presets.getCurrentName());
-        window->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
-        window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-        window->enterModalState (true, juce::ModalCallbackFunction::create ([this, window] (int result)
-        {
-            if (result == 1)
-                mimicProcessor.presets.saveUser (window->getTextEditorContents ("name"));
-
-            refreshPresets();
-        }), true);
-    };
+    presetBar = std::make_unique<MimicPresetBar> (p.presets, look.bangers);
+    stage.addAndMakeVisible (*presetBar);
 
     // The drawer: the rest of Snares, and the output.
     stage.addChildComponent (drawer);
@@ -518,13 +435,12 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     keep.button.setTooltip ("Lock the current variation: it repeats exactly.");
 
     setUpKnob (drawer, swing, ids::swing, "SWING", true);
-    setUpKnob (drawer, mix, ids::mix, "SNARES MIX", true);
+    setUpKnob (drawer, mix, ids::mix, "GNASH MIX", true);
     setUpKnob (drawer, output, ids::output, "OUTPUT", true);
     setUpKnob (drawer, monoBass, ids::monoBass, "MONO BASS", true);
     mix.slider.setTooltip ("Wild mode: how much of the chopped track against the clean one.");
     monoBass.slider.setTooltip ("Keeps the lows of the chopped track mono below this frequency.");
 
-    refreshPresets();
     modeAttachment->sendInitialUpdate();
     updateSnaresLook();
     updateChipNames();
@@ -547,7 +463,7 @@ void MimicEditor::setUpKnob (juce::Component& parent, Knob& k, const char* id, c
 
     k.label.setText (name, juce::dontSendNotification);
     k.label.setJustificationType (juce::Justification::centred);
-    k.label.setColour (juce::Label::textColourId, goldLight);
+    k.label.setColour (juce::Label::textColourId, greenLight);
     k.label.setFont (font (look.bangers, 16.0f));
     parent.addAndMakeVisible (k.slider);
 
@@ -563,7 +479,7 @@ void MimicEditor::setUpPick (juce::Component& parent, Pick& p, const char* id, c
         p.box.addItemList (param->choices, 1);
 
     p.label.setText (name, juce::dontSendNotification);
-    p.label.setColour (juce::Label::textColourId, goldLight);
+    p.label.setColour (juce::Label::textColourId, greenLight);
     p.label.setFont (font (look.bangers, 16.0f));
     p.label.setBorderSize ({});
     parent.addAndMakeVisible (p.box);
@@ -577,39 +493,6 @@ void MimicEditor::setUpSwitch (juce::Component& parent, Switch& s, const char* i
     s.button.getProperties().set ("chip", chip);
     parent.addAndMakeVisible (s.button);
     s.attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (mimicProcessor.parameters, id, s.button);
-}
-
-void MimicEditor::refreshPresets()
-{
-    presetBox.clear (juce::dontSendNotification);
-    const auto& factory = PresetManager::getFactory();
-
-    presetBox.addSectionHeading ("IT ANSWERS");
-    for (int i = 0; i < factory.size(); ++i)
-        if (factory[i].answers)
-            presetBox.addItem (factory[i].name + "   (" + factory[i].tags + ")", i + 1);
-
-    presetBox.addSectionHeading ("GNASH: WILD");
-    for (int i = 0; i < factory.size(); ++i)
-        if (! factory[i].answers && ! factory[i].fill)
-            presetBox.addItem (factory[i].name + "   (" + factory[i].tags + ")", i + 1);
-
-    presetBox.addSectionHeading ("GNASH: FILLS");
-    for (int i = 0; i < factory.size(); ++i)
-        if (! factory[i].answers && factory[i].fill)
-            presetBox.addItem (factory[i].name + "   (" + factory[i].tags + ")", i + 1);
-
-    const auto user = mimicProcessor.presets.getUserPresets();
-
-    if (! user.isEmpty())
-    {
-        presetBox.addSectionHeading ("YOURS");
-
-        for (int i = 0; i < user.size(); ++i)
-            presetBox.addItem (user[i].getFileNameWithoutExtension(), 1001 + i);
-    }
-
-    presetShown = {};
 }
 
 void MimicEditor::showAdvanced (bool show)
@@ -724,22 +607,7 @@ juce::String MimicEditor::valueText (const char* id) const
 
 void MimicEditor::timerCallback()
 {
-    const auto name = mimicProcessor.presets.getCurrentName();
-
-    if (name != presetShown)
-    {
-        presetShown = name;
-        int found = 0;
-
-        for (int i = 0; i < presetBox.getNumItems(); ++i)
-            if (presetBox.getItemText (i).upToFirstOccurrenceOf ("   (", false, false) == name)
-                found = presetBox.getItemId (i);
-
-        if (found != 0)
-            presetBox.setSelectedId (found, juce::dontSendNotification);
-        else
-            presetBox.setText (name, juce::dontSendNotification);
-    }
+    presetBar->refresh();
 
     updateChipNames();
 
@@ -800,39 +668,45 @@ void MimicEditor::timerCallback()
 //==============================================================================
 void MimicEditor::paintSection (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title, const juce::String& subtitle, bool lit)
 {
+    // A comic panel: inked frame, hard shadow, and its caption box sitting
+    // on the top edge.
     const auto area = r.toFloat();
-    g.setColour (ink.withAlpha (0.55f));
-    g.fillRoundedRectangle (area.translated (0, 4), 10.0f);
-    g.setColour (panel);
-    g.fillRoundedRectangle (area, 10.0f);
-    g.setColour (lit ? gold : edge);
-    g.drawRoundedRectangle (area, 10.0f, lit ? 2.5f : 2.0f);
+    g.setColour (ink);
+    g.fillRect (area.translated (6.0f, 6.0f));
+    g.setColour (lit ? panelHi : panel);
+    g.fillRect (area);
+    g.setColour (ink);
+    g.drawRect (area, 4.0f);
 
-    // A title band, so each section reads as its own thing.
-    const auto band = area.withHeight (34.0f);
-    g.setColour (ink.withAlpha (0.45f));
-    g.fillRoundedRectangle (band.reduced (2.0f), 8.0f);
-    g.setColour (lit ? goldLight : dim);
-    g.setFont (font (look.bangers, 24.0f));
-    g.drawText (title, band.reduced (12.0f, 0.0f), juce::Justification::centredLeft);
+    const auto f = font (look.bangers, 21.0f).withExtraKerningFactor (0.04f);
+    const float w = juce::GlyphArrangement::getStringWidth (f, title) + 22.0f;
+    const auto caption = juce::Rectangle<float> (area.getX() + 12.0f, area.getY() - 9.0f, w, 29.0f);
+    g.setColour (ink);
+    g.fillRect (caption.translated (3.0f, 3.0f));
+    g.setColour (lit ? bone : dim);
+    g.fillRect (caption);
+    g.setColour (ink);
+    g.drawRect (caption, 3.0f);
+    g.setFont (f);
+    g.drawText (title, caption, juce::Justification::centred);
 
     if (subtitle.isNotEmpty())
     {
         g.setColour (dim);
         g.setFont (font (look.typewriter, 11.0f));
-        const float titleWidth = juce::GlyphArrangement::getStringWidth (font (look.bangers, 24.0f), title);
-        g.drawText (subtitle, band.reduced (12.0f, 0.0f).withTrimmedLeft (titleWidth + 10.0f), juce::Justification::centredLeft);
+        g.drawText (subtitle, (int) caption.getRight() + 10, (int) area.getY() + 2, 260, 16, juce::Justification::centredLeft);
     }
 }
-
 void MimicEditor::knobCaption (juce::Graphics& g, const Knob& k, const juce::String& name, const char* id, float nameSize, const juce::String& help)
 {
     const auto s = k.slider.getBounds();
     const int w = juce::jmax (s.getWidth() + 40, 110);
     const int x = s.getCentreX() - w / 2;
     const float alpha = k.slider.getAlpha();
-    g.setColour (goldLight.withAlpha (alpha));
     g.setFont (font (look.bangers, nameSize));
+    g.setColour (ink.withAlpha (alpha));
+    g.drawText (name, x + 2, s.getBottom() + 4, w, (int) nameSize + 2, juce::Justification::centred);
+    g.setColour (green.withAlpha (alpha));
     g.drawText (name, x, s.getBottom() + 2, w, (int) nameSize + 2, juce::Justification::centred);
     g.setColour (bone.withAlpha (alpha));
     g.setFont (font (look.typewriter, 12.0f));
@@ -848,13 +722,13 @@ void MimicEditor::knobCaption (juce::Graphics& g, const Knob& k, const juce::Str
 
 void MimicEditor::paintListens (juce::Graphics& g)
 {
-    paintSection (g, listensArea, "IT LISTENS", "to your track", true);
+    paintSection (g, listensArea, juce::String::fromUTF8 ("IT LISTENS\u2026"), "to your track", true);
     paintChest (g);
 
     // The free beat's caption.
     if (freeBeat.slider.isVisible())
     {
-        g.setColour (goldLight);
+        g.setColour (greenLight);
         g.setFont (font (look.bangers, 15.0f));
         g.drawText ("BEAT", freeBeat.slider.getX() - 20, freeBeat.slider.getBottom() + 1, freeBeat.slider.getWidth() + 40, 16, juce::Justification::centred);
         g.setColour (bone);
@@ -866,7 +740,7 @@ void MimicEditor::paintListens (juce::Graphics& g)
     const bool free = juce::roundToInt (value (ids::timing)) == ids::timingFree;
     const float heard = mimicProcessor.swingOut.load();
     const int percent = juce::roundToInt (heard * 100.0f);
-    g.setColour (goldLight);
+    g.setColour (greenLight);
     g.setFont (font (look.bangers, 16.0f));
     g.drawText ("ITS FEEL", 30, 494, 120, 16, juce::Justification::centredLeft);
     g.setColour (free ? dim : bone);
@@ -885,7 +759,7 @@ void MimicEditor::paintListens (juce::Graphics& g)
 void MimicEditor::paintAnswers (juce::Graphics& g)
 {
     const bool quiet = value (ids::answer) <= 0.0f;
-    paintSection (g, answersArea, "IT ANSWERS", quiet ? "silenced: turn Answer up" : "in the gaps you leave", ! quiet);
+    paintSection (g, answersArea, juce::String::fromUTF8 ("\u2026IT ANSWERS!"), quiet ? "silenced: turn Answer up" : "in the gaps you leave", ! quiet);
 
     knobCaption (g, hunger, "HUNGER", ids::hunger, 22.0f, "how often");
     knobCaption (g, patience, "PATIENCE", ids::patience, 22.0f, "how long it waits");
@@ -934,7 +808,7 @@ void MimicEditor::paintAnswers (juce::Graphics& g)
 void MimicEditor::paintSnares (juce::Graphics& g)
 {
     const bool on = snaresOn.button.getToggleState();
-    paintSection (g, snaresArea, "GNASH", "it bites the beat", on);
+    paintSection (g, snaresArea, "GNASH!", "it bites the beat", on);
 
     knobCaption (g, bite, "MILD - WILD", ids::bite, 20.0f);
     knobCaption (g, speed, "SPEED", ids::speed, 15.0f);
@@ -986,7 +860,7 @@ void MimicEditor::paint (juce::Graphics& g)
     // The spine: the maker's name down the left edge, the same on every
     // Aamosphere plugin.
     const auto spine = juce::Rectangle<float> (0.0f, 0.0f, (float) spineWidth, (float) getHeight());
-    g.setColour (gold);
+    g.setColour (spineGold);
     g.fillRect (spine);
     g.setColour (ink);
     g.fillRect (spine.withX ((float) spineWidth - 4.0f).withWidth (4.0f));
@@ -1001,24 +875,42 @@ void MimicEditor::paint (juce::Graphics& g)
                     juce::Rectangle<float> (0.0f, 8.0f + gap * (float) (i + 1) + letterHeight * (float) i, (float) spineWidth - 4.0f, letterHeight),
                     juce::Justification::centred);
 }
-
 void MimicEditor::paintFront (juce::Graphics& g)
 {
-    // Dungeon dark with a torch glow on the chest.
-    juce::ColourGradient glow (juce::Colour (0xff3a1f12), 170.0f, 240.0f, juce::Colour (0xff0b0605), 900.0f, 300.0f, true);
-    glow.addColour (0.55, juce::Colour (0xff160c08));
-    g.setGradientFill (glow);
+    // A purple night between the comic panels.
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2a1240), 0.0f, 0.0f, juce::Colour (0xff050208), 300.0f, (float) frontHeight + 300.0f, false));
     g.fillRect (0, 0, stage.getWidth(), frontHeight);
 
-    // Header.
-    g.setFont (font (look.eater, 70.0f));
-    g.setColour (ink);
-    g.drawText ("MIMIC", 26, 0, 360, 62, juce::Justification::centredLeft);
-    g.setColour (red);
-    g.drawText ("MIMIC", 22, -3, 360, 62, juce::Justification::centredLeft);
-    g.setColour (dim);
-    g.setFont (font (look.typewriter, 12.0f));
-    g.drawText ("it listens. it waits. it answers back.", 24, 56, 320, 16, juce::Justification::centredLeft);
+    // The masthead, slanted, inked all round; and its tag.
+    {
+        juce::GlyphArrangement glyphs;
+        glyphs.addLineOfText (font (look.metal, 62.0f), "MIMIC", 0.0f, 0.0f);
+        juce::Path letters;
+        glyphs.createPath (letters);
+        letters.applyTransform (juce::AffineTransform::translation (22.0f, 54.0f).rotated (juce::degreesToRadians (-3.0f), 22.0f, 40.0f));
+        juce::Path outline;
+        juce::PathStrokeType (7.0f, juce::PathStrokeType::mitered).createStrokedPath (outline, letters);
+        g.setColour (ink);
+        g.fillPath (outline, juce::AffineTransform::translation (4.0f, 4.0f));
+        g.fillPath (outline);
+        g.setColour (green);
+        g.fillPath (letters);
+    }
+
+    {
+        g.saveState();
+        g.addTransform (juce::AffineTransform::rotation (juce::degreesToRadians (4.0f), 280.0f, 32.0f));
+        const juce::Rectangle<float> tag (214.0f, 18.0f, 150.0f, 28.0f);
+        g.setColour (ink);
+        g.fillRect (tag.translated (3.0f, 3.0f));
+        g.setColour (bone);
+        g.fillRect (tag);
+        g.setColour (ink);
+        g.drawRect (tag, 3.0f);
+        g.setFont (font (look.bangers, 17.0f));
+        g.drawText ("IT ANSWERS BACK!", tag, juce::Justification::centred);
+        g.restoreState();
+    }
 
     paintListens (g);
     paintAnswers (g);
@@ -1048,14 +940,14 @@ void MimicEditor::paintDrawer (juce::Graphics& g)
         g.fillRoundedRectangle (r.toFloat(), 8.0f);
         g.setColour (edge);
         g.drawRoundedRectangle (r.toFloat(), 8.0f, 2.0f);
-        g.setColour (goldLight);
+        g.setColour (greenLight);
         g.setFont (font (look.bangers, 20.0f));
         g.drawText (title, r.getX() + 12, r.getY() + 4, r.getWidth() - 24, 22, juce::Justification::centredLeft);
     };
 
-    section (patternBox, fillMode() ? "SNARES: FILL SCHEDULE" : "SNARES: PATTERN");
-    section (throatBox, "SNARES: THE THROAT");
-    section (fillsBox, fillMode() ? "SNARES: FILLS" : "SNARES: FILLS (FILL MODE)");
+    section (patternBox, fillMode() ? "GNASH: FILL SCHEDULE" : "GNASH: PATTERN");
+    section (throatBox, "GNASH: THE THROAT");
+    section (fillsBox, fillMode() ? "GNASH: FILLS" : "GNASH: FILLS (FILL MODE)");
     section (outBox, "MIX & OUTPUT");
 
     g.setColour (dim);
@@ -1072,10 +964,11 @@ void MimicEditor::resized()
     stage.setBounds (spineWidth, 0, contentWidth, getHeight());
 
     // Header.
-    save.setBounds (916, 14, 70, 44);
-    next.setBounds (866, 14, 44, 44);
-    presetBox.setBounds (630, 14, 230, 44);
-    previous.setBounds (580, 14, 44, 44);
+    // The preset unit is laid out at full size and drawn at 75 %, tilted
+    // like a sound effect (as in the Stalker).
+    presetBar->setBounds (560, 4, 560, 70);
+    presetBar->setTransform (juce::AffineTransform::scale (0.75f, 0.75f, 560.0f, 4.0f)
+                                 .rotated (juce::degreesToRadians (-3.0f), 560.0f + 210.0f, 4.0f + 26.0f));
     advancedButton.setBounds (880, 576, 110, 36);
 
     // The three sections.
@@ -1174,103 +1067,118 @@ void MimicEditor::resized()
 //==============================================================================
 void MimicEditor::paintChest (juce::Graphics& g)
 {
+    // The coffin under the moon: its lid slides aside as it answers, and
+    // eyes light up in the gap while it waits. Drawn in a 300 x 270 box.
     const float open = juce::jlimit (0.0f, 1.3f, lidOpen);
-    const float lift = open * 96.0f;
-    const float teethScale = 0.15f + 0.85f * juce::jmin (1.0f, open);
-    const auto at = juce::AffineTransform::scale (chestScale).translated (chestX, chestY);
-
+    const float glow = juce::jlimit (0.0f, 1.0f, eyeGlow);
     g.saveState();
-    g.addTransform (at);
+    g.addTransform (juce::AffineTransform::scale (0.82f).translated (43.0f, 112.0f));
 
-    g.setColour (juce::Colours::black.withAlpha (0.45f));
-    g.fillEllipse (40.0f, 382.0f, 420.0f, 36.0f);
-
-    // Inside the mouth.
-    g.setColour (mouth);
-    g.fillRect (70.0f, 240.0f - lift, 360.0f, lift + 4.0f);
-
-    if (eyeGlow > 0.01f)
+    auto path = [] (std::initializer_list<juce::Point<float>> points)
     {
-        const float eyeY = 240.0f - lift * 0.55f;
+        juce::Path p;
+        bool first = true;
 
-        for (float ex : { 180.0f, 320.0f })
+        for (auto pt : points)
         {
-            g.setColour (juce::Colour (0xffffd23f).withAlpha (juce::jmin (1.0f, eyeGlow) * 0.35f));
-            g.fillEllipse (ex - 16.0f, eyeY - 16.0f, 32.0f, 32.0f);
-            g.setColour (juce::Colour (0xffffd23f).withAlpha (juce::jmin (1.0f, eyeGlow)));
-            g.fillEllipse (ex - 9.0f, eyeY - 9.0f, 18.0f, 18.0f);
-            g.setColour (mouth);
-            g.fillEllipse (ex - 3.0f, eyeY - 7.0f, 6.0f, 14.0f);
+            if (first) p.startNewSubPath (pt);
+            else       p.lineTo (pt);
+            first = false;
         }
+
+        p.closeSubPath();
+        return p;
+    };
+
+    // The moon.
+    g.setColour (moon.withAlpha (0.15f));
+    g.fillEllipse (136.0f, -4.0f, 148.0f, 148.0f);
+    g.setColour (moon);
+    g.fillEllipse (156.0f, 16.0f, 108.0f, 108.0f);
+    g.setColour (juce::Colour (0xffc8c0dc));
+    g.fillEllipse (218.0f, 48.0f, 20.0f, 20.0f);
+    g.fillEllipse (189.0f, 85.0f, 14.0f, 14.0f);
+    g.setColour (ink);
+    g.drawEllipse (156.0f, 16.0f, 108.0f, 108.0f, 3.0f);
+
+    g.setColour (ink.withAlpha (0.7f));
+    g.fillEllipse (30.0f, 240.0f, 240.0f, 24.0f);
+
+    // The body, its dark inside, the eyes and the teeth.
+    const auto body = path ({ { 110, 30 }, { 190, 30 }, { 216, 82 }, { 196, 250 }, { 104, 250 }, { 84, 82 } });
+    g.setColour (wood);
+    g.fillPath (body);
+    g.setColour (ink);
+    g.strokePath (body, juce::PathStrokeType (6.0f, juce::PathStrokeType::mitered));
+    const auto inside = path ({ { 118, 44 }, { 182, 44 }, { 202, 84 }, { 186, 236 }, { 114, 236 }, { 98, 84 } });
+    g.setColour (juce::Colour (0xff0b0510));
+    g.fillPath (inside);
+
+    if (glow > 0.01f)
+    {
+        g.setGradientFill (juce::ColourGradient (green.withAlpha (0.45f * glow), 150.0f, 120.0f, green.withAlpha (0.0f), 150.0f, 200.0f, true));
+        g.fillPath (inside);
     }
 
-    g.setColour (red);
-    g.fillEllipse (160.0f, 236.0f - (4.0f + open * 18.0f), 180.0f, 2.0f * (4.0f + open * 18.0f));
+    for (float ex : { 135.0f, 167.0f })
+    {
+        const float a = 0.25f + 0.75f * glow;
+        g.setColour (green.withAlpha (0.18f * a));
+        g.fillEllipse (ex - 18.0f, 100.0f, 36.0f, 36.0f);
+        g.setColour (green.withAlpha (a));
+        g.fillEllipse (ex - 9.0f, 112.0f, 18.0f, 12.0f);
+        g.setColour (ink);
+        g.fillEllipse (ex - 2.0f, 113.0f, 4.0f, 10.0f);
+    }
 
-    // Lower fangs, then the body.
-    auto lower = fangs (-1.0f);
-    lower.applyTransform (juce::AffineTransform::scale (1.0f, teethScale).translated (0.0f, 240.0f));
-    g.setColour (bone);
-    g.fillPath (lower);
-    g.setColour (ink);
-    g.strokePath (lower, juce::PathStrokeType (2.0f));
+    auto teeth = [&] (std::initializer_list<juce::Point<float>> points)
+    {
+        juce::Path p;
+        bool first = true;
 
-    const juce::Rectangle<float> body (60.0f, 240.0f, 380.0f, 150.0f);
-    g.setColour (wood);
-    g.fillRoundedRectangle (body, 8.0f);
-    g.setColour (woodLine);
+        for (auto pt : points)
+        {
+            if (first) p.startNewSubPath (pt);
+            else       p.lineTo (pt);
+            first = false;
+        }
 
-    for (float y : { 280.0f, 320.0f, 360.0f })
-        g.drawLine (62.0f, y, 438.0f, y, 3.0f);
+        g.setColour (bone);
+        g.strokePath (p, juce::PathStrokeType (4.0f, juce::PathStrokeType::mitered));
+    };
 
-    g.setColour (gold);
-    g.fillRect (92.0f, 240.0f, 22.0f, 150.0f);
-    g.fillRect (386.0f, 240.0f, 22.0f, 150.0f);
-    g.setColour (ink);
-    g.drawRect (92.0f, 240.0f, 22.0f, 150.0f, 3.0f);
-    g.drawRect (386.0f, 240.0f, 22.0f, 150.0f, 3.0f);
-    g.drawRoundedRectangle (body, 8.0f, 4.0f);
+    teeth ({ { 118, 150 }, { 126, 166 }, { 134, 150 }, { 142, 168 }, { 150, 150 }, { 158, 168 }, { 166, 150 }, { 174, 166 }, { 182, 150 } });
+    teeth ({ { 120, 186 }, { 128, 172 }, { 136, 186 }, { 144, 170 }, { 152, 186 }, { 160, 170 }, { 168, 186 }, { 176, 172 }, { 182, 186 } });
 
-    // The lid, lifted.
-    g.saveState();
-    g.addTransform (juce::AffineTransform::translation (0.0f, -lift));
+    // The lid, slid aside; wider while it answers.
+    {
+        const float angle = juce::degreesToRadians (6.0f + 9.0f * juce::jmin (1.0f, open));
+        const auto turn = juce::AffineTransform::rotation (angle, 196.0f, 250.0f).translated (36.0f + 10.0f * juce::jmin (1.0f, open), 4.0f);
+        auto lid = path ({ { 150, 20 }, { 232, 36 }, { 244, 92 }, { 206, 256 }, { 148, 250 }, { 132, 86 } });
+        lid.applyTransform (turn);
+        g.setColour (woodLid);
+        g.fillPath (lid);
+        g.setColour (ink);
+        g.strokePath (lid, juce::PathStrokeType (6.0f, juce::PathStrokeType::mitered));
 
-    auto upper = fangs (1.0f);
-    upper.applyTransform (juce::AffineTransform::scale (1.0f, teethScale).translated (0.0f, 240.0f));
-    g.setColour (bone);
-    g.fillPath (upper);
-    g.setColour (ink);
-    g.strokePath (upper, juce::PathStrokeType (2.0f));
+        juce::Path cross;
+        cross.startNewSubPath (176.0f, 82.0f);
+        cross.lineTo (212.0f, 88.0f);
+        cross.startNewSubPath (195.0f, 66.0f);
+        cross.lineTo (192.0f, 116.0f);
+        cross.applyTransform (turn);
+        g.setColour (ink);
+        g.strokePath (cross, juce::PathStrokeType (9.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (brass);
+        g.strokePath (cross, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
 
-    juce::Path lid;
-    lid.startNewSubPath (56.0f, 240.0f);
-    lid.lineTo (56.0f, 180.0f);
-    lid.quadraticTo (250.0f, 104.0f, 444.0f, 180.0f);
-    lid.lineTo (444.0f, 240.0f);
-    lid.closeSubPath();
-    g.setColour (woodLid);
-    g.fillPath (lid);
-
-    juce::Path grain;
-    grain.startNewSubPath (58.0f, 205.0f);
-    grain.quadraticTo (250.0f, 132.0f, 442.0f, 205.0f);
-    g.setColour (woodLine);
-    g.strokePath (grain, juce::PathStrokeType (3.0f));
-
-    g.setColour (gold);
-    g.fillPath (zigzag ({ { 90, 240 }, { 90, 168 }, { 100, 160 }, { 114, 156 }, { 114, 240 } }));
-    g.fillPath (zigzag ({ { 386, 240 }, { 386, 156 }, { 400, 160 }, { 410, 168 }, { 410, 240 } }));
-    g.fillRect (56.0f, 232.0f, 388.0f, 10.0f);
-    g.setColour (ink);
-    g.strokePath (lid, juce::PathStrokeType (4.0f));
-    g.drawRect (56.0f, 232.0f, 388.0f, 10.0f, 3.0f);
-    g.restoreState();
-
+    // Nails.
+    g.setColour (brass);
+    g.fillEllipse (89.0f, 83.0f, 6.0f, 6.0f);
+    g.fillEllipse (107.0f, 241.0f, 6.0f, 6.0f);
     g.restoreState();
 }
-
-// The script playing now (or the last fill): one coloured block per
-// segment on the grid Speed sets, with the playhead.
 void MimicEditor::paintPattern (juce::Graphics& g, juce::Rectangle<float> r)
 {
     g.setColour (ink);
@@ -1299,7 +1207,7 @@ void MimicEditor::paintPattern (juce::Graphics& g, juce::Rectangle<float> r)
         {
             g.setColour (juce::Colours::black);
             g.fillRect (block);
-            g.setColour (redBright.withAlpha (0.8f));
+            g.setColour (purpleBright.withAlpha (0.8f));
             g.drawLine (block.getX() + 2, block.getY() + 3, block.getRight() - 2, block.getBottom() - 3, 1.5f);
             g.drawLine (block.getX() + 2, block.getBottom() - 3, block.getRight() - 2, block.getY() + 3, 1.5f);
             continue;
@@ -1328,8 +1236,206 @@ void MimicEditor::paintPattern (juce::Graphics& g, juce::Rectangle<float> r)
 
     if (live)
     {
-        g.setColour (redBright);
+        g.setColour (purpleBright);
         g.fillRect (inner.getX() + juce::jlimit (0.0f, span, position) * pxPerPpq - 1.0f, r.getY(), 2.0f, r.getHeight());
     }
 }
 
+
+//==============================================================================
+void MimicSfxButton::paintButton (juce::Graphics& g, bool isHighlighted, bool isDown)
+{
+    const auto bounds = getLocalBounds().toFloat();
+    const auto fill = isHighlighted ? greenLight : green;
+    const float press = isDown ? 1.5f : 0.0f;
+
+    if (kind == Kind::name)
+    {
+        // The preset name as a sound effect. Long names shrink.
+        const auto text = getButtonText().toUpperCase();
+        const float maxWidth = bounds.getWidth() - 16.0f;
+        auto f = font (bangers, 50.0f).withExtraKerningFactor (0.06f);
+        const float width = juce::GlyphArrangement::getStringWidth (f, text);
+
+        if (width > maxWidth)
+            f = font (bangers, juce::jmax (22.0f, 50.0f * maxWidth / width)).withExtraKerningFactor (0.06f);
+
+        juce::GlyphArrangement glyphs;
+        glyphs.addLineOfText (f, text, 0.0f, 0.0f);
+        juce::Path letters;
+        glyphs.createPath (letters);
+
+        const auto box = letters.getBounds();
+        letters.applyTransform (juce::AffineTransform::translation (bounds.getCentreX() - box.getCentreX() - 3.0f + press,
+                                                                    bounds.getCentreY() - box.getCentreY() - 3.0f + press));
+
+        juce::Path outline;
+        juce::PathStrokeType (6.0f, juce::PathStrokeType::mitered).createStrokedPath (outline, letters);
+        outline.addPath (letters);
+
+        g.setColour (ink);
+        g.fillPath (outline, juce::AffineTransform::translation (7.0f, 7.0f));
+        g.setColour (purple);
+        g.fillPath (outline, juce::AffineTransform::translation (5.0f, 5.0f));
+        g.setColour (ink);
+        g.fillPath (outline);
+        g.setColour (fill);
+        g.fillPath (letters);
+        return;
+    }
+
+    // Arrows and SAVE: an ink box leaning forward, a green rim and a purple
+    // hard shadow.
+    const auto box = bounds.reduced (5.0f, 3.0f).translated (-1.5f + press, -1.5f + press);
+    const auto lean = juce::AffineTransform::translation (-box.getCentreX(), -box.getCentreY())
+                          .sheared (-0.14f, 0.0f)
+                          .translated (box.getCentreX(), box.getCentreY());
+    juce::Path shape;
+    shape.addRectangle (box);
+    shape.applyTransform (lean);
+
+    g.setColour (purple);
+    g.fillPath (shape, juce::AffineTransform::translation (3.0f - press, 3.0f - press));
+    g.setColour (ink);
+    g.fillPath (shape);
+    g.setColour (fill);
+    g.strokePath (shape, juce::PathStrokeType (3.0f));
+
+    if (kind == Kind::save)
+    {
+        g.setFont (font (bangers, 17.0f).withExtraKerningFactor (0.08f));
+        g.drawText ("SAVE", box.translated (0.0f, 1.0f), juce::Justification::centred);
+        return;
+    }
+
+    const auto c = box.getCentre();
+    const float sz = juce::jmin (box.getWidth(), box.getHeight()) * 0.26f;
+    const float dir = kind == Kind::next ? 1.0f : -1.0f;
+    juce::Path arrow;
+    arrow.addTriangle (c.x + dir * sz, c.y, c.x - dir * sz * 0.8f, c.y - sz, c.x - dir * sz * 0.8f, c.y + sz);
+    g.setColour (fill);
+    g.fillPath (arrow);
+    g.setColour (ink);
+    g.strokePath (arrow, juce::PathStrokeType (1.5f));
+}
+
+MimicPresetBar::MimicPresetBar (mimic::PresetManager& p, juce::Typeface::Ptr bangers)
+    : presets (p), bangersFace (bangers),
+      previous (MimicSfxButton::Kind::previous, bangers), next (MimicSfxButton::Kind::next, bangers),
+      name (MimicSfxButton::Kind::name, bangers), save (MimicSfxButton::Kind::save, bangers)
+{
+    for (auto* b : { &previous, &next, &name, &save })
+        addAndMakeVisible (b);
+
+    previous.onClick = [this] { presets.step (-1); refresh(); };
+    next.onClick = [this] { presets.step (1); refresh(); };
+    name.onClick = [this] { showMenu(); };
+    save.onClick = [this] { showSaveDialog(); };
+
+    previous.setTooltip ("Previous preset");
+    next.setTooltip ("Next preset");
+    name.setTooltip ("Choose a preset");
+    save.setTooltip ("Save the current sound as a preset");
+    refresh();
+}
+
+void MimicPresetBar::resized()
+{
+    // SAVE sits at the right; the arrows hug the name, however long it is.
+    auto area = getLocalBounds();
+    save.setBounds (area.removeFromRight (62).withSizeKeepingCentre (62, 38));
+    area.removeFromRight (4);
+
+    const auto text = name.getButtonText().toUpperCase();
+    const float textWidth = juce::GlyphArrangement::getStringWidth (font (bangersFace, 50.0f).withExtraKerningFactor (0.06f), text);
+    const int nameWidth = juce::jlimit (110, area.getWidth() - 80, (int) textWidth + 30);
+    next.setBounds (area.removeFromRight (40).withSizeKeepingCentre (40, 42));
+    name.setBounds (area.removeFromRight (nameWidth));
+    previous.setBounds (area.removeFromRight (40).withSizeKeepingCentre (40, 42));
+}
+
+void MimicPresetBar::refresh()
+{
+    const auto current = presets.getCurrentName();
+
+    if (name.getButtonText() != current)
+    {
+        name.setButtonText (current);
+        resized();
+        repaint();
+    }
+}
+
+void MimicPresetBar::showMenu()
+{
+    juce::PopupMenu menu;
+    const auto& factory = mimic::PresetManager::getFactory();
+    const auto user = presets.getUserPresets();
+    const auto current = presets.getCurrentName();
+
+    auto section = [&] (const char* title, std::function<bool (const mimic::PresetManager::Info&)> wanted)
+    {
+        menu.addSectionHeader (title);
+
+        for (int i = 0; i < factory.size(); ++i)
+            if (wanted (factory[i]))
+                menu.addItem (1 + i, factory[i].name + "   (" + factory[i].tags + ")", true, factory[i].name == current);
+    };
+
+    section ("It answers", [] (const auto& info) { return info.answers; });
+    section ("Gnash: wild", [] (const auto& info) { return ! info.answers && ! info.fill; });
+    section ("Gnash: fills", [] (const auto& info) { return ! info.answers && info.fill; });
+
+    menu.addSectionHeader ("Yours");
+
+    if (user.isEmpty())
+        menu.addItem (-1, "(none yet - press SAVE)", false);
+
+    for (int i = 0; i < user.size(); ++i)
+        menu.addItem (1000 + i, user[i].getFileNameWithoutExtension(), true, user[i].getFileNameWithoutExtension() == current);
+
+    menu.addSeparator();
+    menu.addItem (2000, "Show preset folder");
+
+    juce::Component::SafePointer<MimicPresetBar> safe (this);
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&name),
+                        [safe, user] (int result)
+                        {
+                            if (safe == nullptr || result <= 0)
+                                return;
+
+                            if (result >= 2000)
+                            {
+                                mimic::PresetManager::userFolder().createDirectory();
+                                mimic::PresetManager::userFolder().revealToUser();
+                            }
+                            else if (result >= 1000)
+                            {
+                                safe->presets.loadUser (user[result - 1000]);
+                            }
+                            else
+                            {
+                                safe->presets.loadFactory (result - 1);
+                            }
+
+                            safe->refresh();
+                        });
+}
+
+void MimicPresetBar::showSaveDialog()
+{
+    auto* window = new juce::AlertWindow ("Save preset", "Name the preset:", juce::MessageBoxIconType::NoIcon, this);
+    window->addTextEditor ("name", presets.getCurrentName());
+    window->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    juce::Component::SafePointer<MimicPresetBar> safe (this);
+    window->enterModalState (true, juce::ModalCallbackFunction::create ([safe, window] (int result)
+    {
+        if (safe != nullptr && result == 1)
+        {
+            safe->presets.saveUser (window->getTextEditorContents ("name"));
+            safe->refresh();
+        }
+    }), true);
+}

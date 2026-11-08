@@ -39,11 +39,12 @@ target_sources(Mimic PRIVATE
     ${MIMIC_DSP_SOURCES}
     Source/PluginEditor.cpp)
 
-# Special Elite (Apache 2.0), Bangers and Eater (SIL OFL 1.1), licences beside them.
+# Special Elite (Apache 2.0), Bangers, Eater and Metal Mania (SIL OFL 1.1), licences beside them.
 juce_add_binary_data(MimicFonts SOURCES
     Resources/Fonts/SpecialElite-Regular.ttf
     Resources/Fonts/Bangers-Regular.ttf
-    Resources/Fonts/Eater-Regular.ttf)
+    Resources/Fonts/Eater-Regular.ttf
+    Resources/Fonts/MetalMania-Regular.ttf)
 
 juce_generate_juce_header(Mimic)
 
