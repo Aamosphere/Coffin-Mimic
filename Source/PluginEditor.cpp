@@ -884,10 +884,10 @@ void MimicEditor::paintFront (juce::Graphics& g)
     // The masthead, slanted, inked all round; and its tag.
     {
         juce::GlyphArrangement glyphs;
-        glyphs.addLineOfText (font (look.metal, 62.0f), "MIMIC", 0.0f, 0.0f);
+        glyphs.addLineOfText (font (look.metal, 50.0f), "COFFIN MIMIC", 0.0f, 0.0f);
         juce::Path letters;
         glyphs.createPath (letters);
-        letters.applyTransform (juce::AffineTransform::translation (22.0f, 54.0f).rotated (juce::degreesToRadians (-3.0f), 22.0f, 40.0f));
+        letters.applyTransform (juce::AffineTransform::translation (22.0f, 52.0f).rotated (juce::degreesToRadians (-3.0f), 22.0f, 40.0f));
         juce::Path outline;
         juce::PathStrokeType (7.0f, juce::PathStrokeType::mitered).createStrokedPath (outline, letters);
         g.setColour (ink);
@@ -899,8 +899,8 @@ void MimicEditor::paintFront (juce::Graphics& g)
 
     {
         g.saveState();
-        g.addTransform (juce::AffineTransform::rotation (juce::degreesToRadians (4.0f), 280.0f, 32.0f));
-        const juce::Rectangle<float> tag (214.0f, 18.0f, 150.0f, 28.0f);
+        g.addTransform (juce::AffineTransform::rotation (juce::degreesToRadians (4.0f), 470.0f, 32.0f));
+        const juce::Rectangle<float> tag (400.0f, 20.0f, 150.0f, 28.0f);
         g.setColour (ink);
         g.fillRect (tag.translated (3.0f, 3.0f));
         g.setColour (bone);

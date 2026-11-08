@@ -3,7 +3,7 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 
-// The Mimic's face: a treasure chest in a dungeon that listens to your
+// The Coffin Mimic's face: a coffin under the moon that listens to your
 // track and answers back. The front page has three sections, each in its own
 // frame:
 //   IT LISTENS  what it hears, and what it is doing about it right now

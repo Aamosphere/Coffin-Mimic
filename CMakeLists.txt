@@ -20,7 +20,7 @@ juce_add_plugin(Mimic
     PLUGIN_MANUFACTURER_CODE Aamo
     PLUGIN_CODE Mimc
     FORMATS AU VST3
-    PRODUCT_NAME "Mimic"
+    PRODUCT_NAME "Coffin Mimic"
     BUNDLE_ID com.aamosphere.mimic
     AU_MAIN_TYPE kAudioUnitType_MusicEffect
     IS_SYNTH FALSE
