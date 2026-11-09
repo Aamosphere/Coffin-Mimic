@@ -668,35 +668,41 @@ void MimicEditor::timerCallback()
 //==============================================================================
 void MimicEditor::paintSection (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title, const juce::String& subtitle, bool lit)
 {
-    // A comic panel: inked frame, hard shadow, and its caption box sitting
-    // on the top edge.
+    // A comic panel: inked frame and hard shadow, and the narrator's bar
+    // across its top telling what this panel is about.
     const auto area = r.toFloat();
     g.setColour (ink);
     g.fillRect (area.translated (6.0f, 6.0f));
     g.setColour (lit ? panelHi : panel);
     g.fillRect (area);
+
+    float right = area.getRight() - 2.0f;
+
+    // Gnash's switch sits at the right end of its bar.
+    if (r == snaresArea)
+        right = (float) snaresOn.button.getX() - 4.0f;
+
+    const auto bar = juce::Rectangle<float>::leftTopRightBottom (area.getX(), area.getY(), right, area.getY() + 32.0f);
+    g.setColour (lit ? bone : dim);
+    g.fillRect (bar);
     g.setColour (ink);
+    g.fillRect (bar.withY (bar.getBottom() - 1.0f).withHeight (3.0f));
     g.drawRect (area, 4.0f);
 
     const auto f = font (look.bangers, 21.0f).withExtraKerningFactor (0.04f);
-    const float w = juce::GlyphArrangement::getStringWidth (f, title) + 22.0f;
-    const auto caption = juce::Rectangle<float> (area.getX() + 12.0f, area.getY() - 9.0f, w, 29.0f);
-    g.setColour (ink);
-    g.fillRect (caption.translated (3.0f, 3.0f));
-    g.setColour (lit ? bone : dim);
-    g.fillRect (caption);
-    g.setColour (ink);
-    g.drawRect (caption, 3.0f);
     g.setFont (f);
-    g.drawText (title, caption, juce::Justification::centred);
+    g.setColour (ink);
+    g.drawText (title, bar.withTrimmedLeft (12.0f), juce::Justification::centredLeft);
 
     if (subtitle.isNotEmpty())
     {
-        g.setColour (dim);
-        g.setFont (font (look.typewriter, 11.0f));
-        g.drawText (subtitle, (int) caption.getRight() + 10, (int) area.getY() + 2, 260, 16, juce::Justification::centredLeft);
+        const float w = juce::GlyphArrangement::getStringWidth (f, title);
+        g.setFont (font (look.typewriter, 12.0f));
+        g.setColour (ink.withAlpha (0.75f));
+        g.drawText (subtitle, bar.withTrimmedLeft (12.0f + w + 10.0f), juce::Justification::centredLeft);
     }
 }
+
 void MimicEditor::knobCaption (juce::Graphics& g, const Knob& k, const juce::String& name, const char* id, float nameSize, const juce::String& help)
 {
     const auto s = k.slider.getBounds();
