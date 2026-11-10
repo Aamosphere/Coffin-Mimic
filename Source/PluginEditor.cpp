@@ -668,39 +668,28 @@ void MimicEditor::timerCallback()
 //==============================================================================
 void MimicEditor::paintSection (juce::Graphics& g, juce::Rectangle<int> r, const juce::String& title, const juce::String& subtitle, bool lit)
 {
-    // A comic panel: inked frame and hard shadow, and the narrator's bar
-    // across its top telling what this panel is about.
+    // A comic panel (inked frame, hard shadow) and the narrator's caption
+    // box hanging over its top edge, as in the old comics: "Meanwhile..."
+    juce::ignoreUnused (subtitle);
     const auto area = r.toFloat();
     g.setColour (ink);
     g.fillRect (area.translated (6.0f, 6.0f));
     g.setColour (lit ? panelHi : panel);
     g.fillRect (area);
-
-    float right = area.getRight() - 2.0f;
-
-    // Gnash's switch sits at the right end of its bar.
-    if (r == snaresArea)
-        right = (float) snaresOn.button.getX() - 4.0f;
-
-    const auto bar = juce::Rectangle<float>::leftTopRightBottom (area.getX(), area.getY(), right, area.getY() + 32.0f);
-    g.setColour (lit ? bone : dim);
-    g.fillRect (bar);
     g.setColour (ink);
-    g.fillRect (bar.withY (bar.getBottom() - 1.0f).withHeight (3.0f));
     g.drawRect (area, 4.0f);
 
-    const auto f = font (look.bangers, 21.0f).withExtraKerningFactor (0.04f);
-    g.setFont (f);
+    const auto f = font (look.typewriter, 17.0f);
+    const float w = juce::GlyphArrangement::getStringWidth (f, title) + 26.0f;
+    const auto box = juce::Rectangle<float> (area.getX() + 14.0f, area.getY() - 12.0f, w, 32.0f);
     g.setColour (ink);
-    g.drawText (title, bar.withTrimmedLeft (12.0f), juce::Justification::centredLeft);
-
-    if (subtitle.isNotEmpty())
-    {
-        const float w = juce::GlyphArrangement::getStringWidth (f, title);
-        g.setFont (font (look.typewriter, 12.0f));
-        g.setColour (ink.withAlpha (0.75f));
-        g.drawText (subtitle, bar.withTrimmedLeft (12.0f + w + 10.0f), juce::Justification::centredLeft);
-    }
+    g.fillRect (box.translated (5.0f, 5.0f));
+    g.setColour (lit ? bone : dim);
+    g.fillRect (box);
+    g.setColour (ink);
+    g.drawRect (box, 3.0f);
+    g.setFont (f);
+    g.drawText (title, box, juce::Justification::centred);
 }
 
 void MimicEditor::knobCaption (juce::Graphics& g, const Knob& k, const juce::String& name, const char* id, float nameSize, const juce::String& help)
@@ -728,7 +717,7 @@ void MimicEditor::knobCaption (juce::Graphics& g, const Knob& k, const juce::Str
 
 void MimicEditor::paintListens (juce::Graphics& g)
 {
-    paintSection (g, listensArea, juce::String::fromUTF8 ("IT LISTENS\u2026"), "to your track", true);
+    paintSection (g, listensArea, "Meanwhile, it listens...", {}, true);
     paintChest (g);
 
     // The free beat's caption.
@@ -765,7 +754,7 @@ void MimicEditor::paintListens (juce::Graphics& g)
 void MimicEditor::paintAnswers (juce::Graphics& g)
 {
     const bool quiet = value (ids::answer) <= 0.0f;
-    paintSection (g, answersArea, juce::String::fromUTF8 ("\u2026IT ANSWERS!"), quiet ? "silenced: turn Answer up" : "in the gaps you leave", ! quiet);
+    paintSection (g, answersArea, quiet ? "...it keeps quiet (Answer is at 0)." : "...then it answers back!", {}, ! quiet);
 
     knobCaption (g, hunger, "HUNGER", ids::hunger, 22.0f, "how often");
     knobCaption (g, patience, "PATIENCE", ids::patience, 22.0f, "how long it waits");
@@ -814,7 +803,7 @@ void MimicEditor::paintAnswers (juce::Graphics& g)
 void MimicEditor::paintSnares (juce::Graphics& g)
 {
     const bool on = snaresOn.button.getToggleState();
-    paintSection (g, snaresArea, "GNASH!", "it bites the beat", on);
+    paintSection (g, snaresArea, on ? "...and GNASH bites!" : "GNASH sleeps...", {}, on);
 
     knobCaption (g, bite, "MILD - WILD", ids::bite, 20.0f);
     knobCaption (g, speed, "SPEED", ids::speed, 15.0f);
