@@ -84,7 +84,7 @@ namespace mimic::ids
     // v0.8: the Mimic answers. It waits for a gap in the playing and fills
     // it with the last phrase, bent. The beat masher (all of the above)
     // became Snares, an optional section of its own.
-    inline constexpr const char* answer       = "answer";      // how loud the answers are, 0 = never
+    inline constexpr const char* answer       = "answer";      // v0.10: a mix. 0 = track only, 50 % = both, 100 % = answers only
     inline constexpr const char* hunger       = "hunger";      // how soon and how often it answers
     inline constexpr const char* mockery      = "mockery";     // how far an answer is bent
     inline constexpr const char* space        = "space";       // the cave and the echoes
@@ -108,6 +108,10 @@ namespace mimic::ids
     inline constexpr const char* timing       = "timing";      // song tempo or free
     inline constexpr const char* freeBeat     = "freeBeat";    // ms, the beat when free
     inline constexpr const char* answerBreaks = "answerBreaks"; // answers in the breaks the masher bites
+
+    // v0.10: how long the cave and the echoes ring.
+    inline constexpr const char* spaceLength  = "spaceLength";
+    inline const juce::StringArray spaceLengthNames { "Short", "Medium", "Long", "Endless" };
 
     enum Timing { timingSong, timingFree };
     inline const juce::StringArray timingNames { "Song tempo", "Free (seconds)" };

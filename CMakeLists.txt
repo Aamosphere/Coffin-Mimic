@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Mimic VERSION 0.9.0)
+project(Mimic VERSION 0.10.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0")
 

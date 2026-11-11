@@ -80,6 +80,8 @@ public:
     bool advancedOpen = false;
 
 private:
+    float trackGain = 1.0f;   // the track under the answers (Answer past 50 %)
+    juce::AudioBuffer<float> sideCopy;   // the sidechain, saved before a Mono -> Stereo copy overwrites it
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     float value (const char* id) const { return parameters.getRawParameterValue (id)->load(); }
     int choice (const char* id) const { return (int) value (id); }

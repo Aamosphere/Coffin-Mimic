@@ -24,7 +24,6 @@ namespace mimic
             r = std::sin (theta) * juce::MathConstants<float>::sqrt2;
         }
 
-        constexpr float fifthUp = 1.4983071f;
     }
 
     //==========================================================================
@@ -314,6 +313,12 @@ namespace mimic
         wowInc = (float) (hz / sampleRate);
     }
 
+    void TapeRead::setDrift (float depth, float hz, double sampleRate)
+    {
+        driftDepth = depth;
+        driftInc = (float) (hz / sampleRate);
+    }
+
     double TapeRead::progress() const
     {
         return end > begin ? (pos - begin) / (end - begin) : 1.0;
@@ -333,6 +338,14 @@ namespace mimic
             wowPhase += wowInc;
             wowPhase -= std::floor (wowPhase);
             rateNow *= 1.0 + wowDepth * std::sin (juce::MathConstants<float>::twoPi * wowPhase);
+        }
+
+        if (driftDepth > 0.0f)
+        {
+            driftPhase += driftInc;
+            driftPhase -= std::floor (driftPhase);
+            const float t = juce::MathConstants<float>::twoPi * driftPhase;
+            rateNow *= 1.0 + driftDepth * (0.6f * std::sin (t) + 0.4f * std::sin (2.37f * t + 1.3f));
         }
 
         const bool fast = rateNow > 1.15;
@@ -534,10 +547,13 @@ namespace mimic
         scanPos = s.from;
         spawning = true;
         countdown = 0.0f;
+        age = 0;
+        gridTick = 0;
         rng = Rng (seed);
 
         // Overlapping grains add up roughly like noise.
-        const float overlap = juce::jmax (1.0f, s.density * s.grainMs * 0.001f);
+        const float perSecond = s.grid > 0.0 ? (float) (sr / s.grid) * s.gridChance : s.density;
+        const float overlap = juce::jmax (1.0f, perSecond * s.grainMs * 0.001f);
         norm = 1.15f / std::sqrt (overlap);
 
         for (auto& g : grains)
@@ -575,9 +591,26 @@ namespace mimic
         g.rate = s.pitches[(size_t) rng.below (4)] * std::exp2 (cents / 1200.0f);
         g.reversed = rng.chance (s.reverse);
 
-        const double centre = scanPos + rng.range (-1.0f, 1.0f) * s.jitterMs * 0.001 * sr;
-        const double span = g.length * g.rate;
-        double startPos = g.reversed ? centre + 0.5 * span : centre - 0.5 * span;
+        double startPos;
+        g.sharp = false;
+
+        if (s.grid > 0.0)
+        {
+            // On the grid: from the capture's own grid line nearest the scan
+            // (or one either side), forwards from its start, so a hit in it
+            // lands on our line.
+            const double line = std::floor ((scanPos - s.from) / s.grid + 0.5) + (double) ((int) rng.below (3) - 1) * (rng.chance (s.jitterMs / 100.0f) ? 1.0 : 0.0);
+            startPos = s.from + juce::jmax (0.0, line) * s.grid;
+            g.reversed = false;
+            g.sharp = true;
+        }
+        else
+        {
+            const double centre = scanPos + rng.range (-1.0f, 1.0f) * s.jitterMs * 0.001 * sr;
+            const double span = g.length * g.rate;
+            startPos = g.reversed ? centre + 0.5 * span : centre - 0.5 * span;
+        }
+
         startPos = juce::jlimit (0.0, (double) capture->length - 1.0, startPos);
         g.pos = startPos;
         g.age = 0;
@@ -598,13 +631,29 @@ namespace mimic
 
         if (spawning)
         {
-            countdown -= 1.0f;
-
-            if (countdown <= 0.0f)
+            if (s.grid > 0.0)
             {
-                spawn();
-                countdown += (float) sr / juce::jmax (1.0f, s.density) * rng.range (0.6f, 1.4f);
+                // A grain on each grid line (some skipped), exactly on it.
+                if ((double) age >= (double) gridTick * s.grid)
+                {
+                    ++gridTick;
+
+                    if (rng.chance (s.gridChance))
+                        spawn();
+                }
             }
+            else
+            {
+                countdown -= 1.0f;
+
+                if (countdown <= 0.0f)
+                {
+                    spawn();
+                    countdown += (float) sr / juce::jmax (1.0f, s.density) * rng.range (0.6f, 1.4f);
+                }
+            }
+
+            ++age;
 
             scanPos += s.scan;
 
@@ -623,9 +672,22 @@ namespace mimic
             if (! g.on)
                 continue;
 
-            const float phase = (float) g.age / (float) g.length * tableScale;
-            const int k = (int) phase;
-            const float w = hann[(size_t) k] + (phase - (float) k) * (hann[(size_t) juce::jmin (k + 1, (int) tableScale)] - hann[(size_t) k]);
+            float w;
+
+            if (g.sharp)
+            {
+                // 2 ms in, held, the last third out: the hit keeps its edge.
+                const float x = (float) g.age;
+                const float in = juce::jmin (1.0f, x / (float) (0.002 * sr));
+                const float outPart = juce::jlimit (0.0f, 1.0f, ((float) g.length - x) / (0.33f * (float) g.length));
+                w = in * outPart * outPart * (3.0f - 2.0f * outPart);
+            }
+            else
+            {
+                const float phase = (float) g.age / (float) g.length * tableScale;
+                const int k = (int) phase;
+                w = hann[(size_t) k] + (phase - (float) k) * (hann[(size_t) juce::jmin (k + 1, (int) tableScale)] - hann[(size_t) k]);
+            }
             const bool fast = g.rate > 1.15;
             l += w * g.gainL * capture->read (0, g.pos, false, fast);
             r += w * g.gainR * capture->read (1, g.pos, false, fast);
@@ -675,7 +737,7 @@ namespace mimic
         gargoyle::Reverb::Settings rs;
         rs.space = 0;
         rs.size = 0.55f + 0.4f * space;
-        rs.decay = (1.2f + 5.5f * space) * decayScale;
+        rs.decay = juce::jmin (60.0f, (1.2f + 5.5f * space) * decayScale);
         rs.early = 0.3f;
         rs.predelayMs = 18.0f + 40.0f * space;
         rs.lows = 0.85f;
@@ -1140,6 +1202,10 @@ namespace mimic
         slot.toCave = 0.25f * sp;
         slot.useHp = slot.useLp = slot.useBand = false;
         slot.radio = slot.mock = false;
+        slot.ghost = false;
+        slot.ghostEnv = 0.0f;
+        slot.hitAt = 0;
+        slot.mockRatchet = false;
         slot.tape = {};
         slot.tape2 = {};
         slot.tapeGain = slot.tape2Gain = slot.stretchGain = slot.stretch2Gain = slot.cloudGain = 0.0f;
@@ -1165,9 +1231,16 @@ namespace mimic
             return c.startFor (end, (int) (beats * beat), (int) (minimumSeconds * sr));
         };
 
+        // Space length: Short, Medium, Long, Endless. Stretches the cave and
+        // the echoes' feedback.
+        static constexpr float caveLengths[] { 0.35f, 1.0f, 2.3f, 5.0f };
+        static constexpr float echoLengths[] { 0.55f, 1.0f, 1.25f, 1.45f };
+        const int lengthIndex = juce::jlimit (0, 3, s.spaceLength);
+        const float echoScale = echoLengths[lengthIndex];
+
         TapeDelay::Settings echo;
         echo.delaySamples = (float) juce::jmin (2.4 * sr, 0.75 * beat);
-        echo.feedback = 0.25f + 0.25f * sp;
+        echo.feedback = juce::jmin (0.9f, (0.25f + 0.25f * sp) * echoScale);
         echo.toneHz = 4500.0f;
         echo.wow = 0.2f;
         echo.pingPong = 0.5f;
@@ -1186,7 +1259,10 @@ namespace mimic
                     rate = rng.chance (0.5f) ? 2.0 : 0.5;
 
                 slot.tape.start (&c, from, end, rate, false);
-                slot.tape.setWow (0.0015f + 0.006f * m, 0.7f, sr);
+                // A little wobble in the tuning: a quick wow and a slow,
+                // uneven drift (about 5 cents, up to 12 with Mockery).
+                slot.tape.setWow (0.0008f + 0.0025f * m, 0.75f, sr);
+                slot.tape.setDrift (0.0028f + 0.0035f * m, 0.23f + 0.2f * rng.uni(), sr);
                 slot.tapeGain = 1.0f;
                 length = (end - from) / rate;
                 slot.useLp = slot.useHp = true;
@@ -1198,57 +1274,28 @@ namespace mimic
 
             case Trick::ghost:
             {
+                // The phrase comes back without its attacks: every note
+                // swells in (as with a volume pedal), and most of it is
+                // heard through the cave. On tape, at its own speed, so it
+                // lands exactly where the phrase did.
                 from = lastBeats (2.0, 0.3);
                 length = end - from;
-
-                if (tonal)
-                {
-                    if (m < 0.35f)
-                    {
-                        // An octave up over the phrase itself.
-                        slot.stretch.start (&c, from, end, 1.0, 2.0f, false, true);
-                        slot.stretchGain = 0.8f;
-                        slot.tape.start (&c, from, end, 1.0, false);
-                        slot.tapeGain = 0.4f;
-                        shimmer = 0.2f;
-                    }
-                    else if (m < 0.7f)
-                    {
-                        slot.stretch.start (&c, from, end, 1.0, 0.5f, false, true);
-                        slot.stretchGain = 0.9f;
-                        slot.stretch2.start (&c, from, end, 1.0, 2.0f, false, true);
-                        slot.stretch2Gain = 0.45f;
-                        shimmer = 0.15f;
-                    }
-                    else
-                    {
-                        slot.stretch.start (&c, from, end, 1.0, 0.5f, false, true);
-                        slot.stretchGain = 0.85f;
-                        slot.stretch2.start (&c, from, end, 1.0, rng.chance (0.5f) ? 0.25f : fifthUp, false, true);
-                        slot.stretch2Gain = 0.55f;
-                        shimmer = 0.1f;
-                    }
-                }
-                else
-                {
-                    // Drums: tape speed. Slow and heavy, or quick and small.
-                    const bool down = rng.chance (0.6f);
-                    const double rate = down ? 0.5 : 2.0;
-                    const int src = down ? (int) juce::jmax ((double) from, end - beat) : from;
-                    slot.tape.start (&c, src, end, rate, false);
-                    slot.tapeGain = 1.0f;
-                    length = (end - src) / rate;
-
-                    if (m > 0.5f)
-                    {
-                        slot.tape2.start (&c, src, end, down ? 1.0 : 0.5, false);
-                        slot.tape2Gain = 0.35f;
-                    }
-                }
-
-                slot.toCave = 0.45f + 0.35f * sp;
-                slot.toDelay = 0.15f;
-                panSpread = 0.15f;
+                slot.tape.start (&c, from, end, 1.0, false);
+                slot.tape.setDrift (0.0012f, 0.2f, sr);
+                slot.tapeGain = 1.15f;
+                slot.ghost = true;
+                slot.ghostAttack = (float) ((0.09 + 0.3 * m) * sr);
+                slot.ghostFall = 1.0f - std::exp (-1.0f / (float) (0.004 * sr));
+                slot.attack = (float) (0.002 * sr);
+                slot.useHp = slot.useLp = true;
+                slot.lpFrom = slot.lpTo = 7000.0f - 2500.0f * m;
+                slot.dry = 0.75f - 0.35f * m;
+                slot.toCave = 0.75f + 0.25f * sp;
+                slot.toDelay = 0.08f + 0.12f * sp;
+                // Further bent: the cave's shimmer an octave up.
+                shimmer = m > 0.4f ? 0.08f + 0.3f * (m - 0.4f) : 0.0f;
+                decayScale = 1.4f;
+                panSpread = 0.0f;
                 break;
             }
 
@@ -1264,12 +1311,27 @@ namespace mimic
                 cs.reverse = 0.1f + 0.45f * m;
                 cs.spread = 1.0f;
 
+                // Octaves only: no fourths or fifths in the swarm.
                 if (m < 0.3f)
                     cs.pitches = { 1.0f, 1.0f, 1.0f, 1.0f };
                 else if (m < 0.6f)
                     cs.pitches = { 1.0f, 1.0f, 2.0f, 1.0f };
                 else
-                    cs.pitches = { 1.0f, 2.0f, 0.5f, fifthUp };
+                    cs.pitches = { 1.0f, 2.0f, 0.5f, 1.0f };
+
+                // With the song playing, the grains keep its time: they start
+                // on its sixteenths (eighths for a line) and carry the
+                // capture's own sixteenths, so a cloud from far back in
+                // Memory still lands in time.
+                if (s.playing)
+                {
+                    cs.grid = beat * (tonal ? 0.5 : 0.25);
+                    cs.gridChance = tonal ? 0.75f + 0.25f * m : 0.6f + 0.35f * m;
+                    cs.grainMs = (float) (cs.grid / sr * 1000.0 * (tonal ? 1.6 : 0.9));
+                    cs.scan = tonal ? 0.5 : 1.0;
+                    cs.jitterMs = 40.0f * m;
+                    cs.pitches = tonal ? cs.pitches : std::array<float, 4> { 1.0f, 1.0f, 1.0f, m > 0.6f ? 0.5f : 1.0f };
+                }
 
                 slot.cloud.start (&c, cs, rng.next());
                 slot.cloudGain = 1.1f;
@@ -1311,33 +1373,52 @@ namespace mimic
 
             case Trick::dub:
             {
+                // First a reverse-reverb swell, made of the last note's own
+                // grains played backwards; it rises for one beat and stops
+                // dead as the note itself lands on the next beat. Then the
+                // note goes into the tape echo. No pitch tricks: the echo
+                // does not glide and its tape hardly wobbles.
                 from = c.lastOnset;
                 const int to = juce::jmin (end, from + (int) juce::jmin (beat, 1.2 * sr));
+                const double swell = juce::jlimit (0.25 * sr, 1.5 * sr, beat);
+                slot.hitAt = (int64_t) swell;
+
+                Cloud::Settings bloom;
+                bloom.from = from;
+                bloom.to = to;
+                bloom.scan = 0.0;
+                bloom.grainMs = 70.0f + 50.0f * rng.uni();
+                bloom.density = 70.0f;
+                bloom.jitterMs = (float) ((to - from) / sr * 500.0);
+                bloom.reverse = 1.0f;
+                bloom.spread = 1.0f;
+                bloom.detuneCents = 2.0f;
+                slot.cloud.start (&c, bloom, rng.next());
+                slot.cloud.setScanPosition ((from + to) * 0.5);
+                slot.cloudGain = 0.9f;
+
                 slot.tape.start (&c, from, to, 1.0, false);
-                slot.tapeGain = 1.0f;
-                length = to - from;
-                slot.dry = 0.8f;
-                slot.toDelay = 1.0f;
-                slot.toCave = 0.2f + 0.25f * sp;
+                slot.tapeGain = 0.0f;   // waits for the hit
+                length = swell + (to - from);
+                slot.attack = (float) (0.002 * sr);
+                slot.dry = 0.85f;
+                slot.toDelay = 0.0f;    // the swell is not echoed, only the note
+                slot.toDelayAfterHit = 1.0f;
+                slot.toCave = 0.3f + 0.3f * sp;
 
                 static constexpr double times[] { 0.75, 0.75, 1.0, 0.5, 1.5 };
                 const double t = times[rng.below (5)] * beat;
                 echo.delaySamples = (float) juce::jmin (2.4 * sr, t);
-                echo.feedback = 0.55f + 0.37f * m;
+                echo.feedback = juce::jmin (0.92f, (0.5f + 0.3f * m) * echoScale);
                 echo.pingPong = 0.75f;
-                echo.wow = 0.25f + 0.6f * m;
-                echo.grit = 0.3f + 0.6f * m;
-                echo.toneHz = 4200.0f - 2200.0f * m;
+                echo.wow = 0.04f;
+                echo.grit = 0.25f + 0.45f * m;
+                echo.toneHz = 4200.0f - 2000.0f * m;
                 dub = true;
                 heatScale = 1.2f;
-
-                // The tape slows to a crawl: the echoes dive.
                 slot.spiralFrom = slot.spiralTo = echo.delaySamples;
-
-                if (m > 0.6f && rng.chance (m))
-                    slot.spiralTo = (float) juce::jmin (2.4 * sr, 2.0 * t);
-
-                delayHold = (int64_t) ((2.0 + 5.0 * m) * sr);
+                decayScale = 1.3f;
+                delayHold = (int64_t) ((swell / sr + 2.0 + 5.0 * m) * echoScale * sr);
                 break;
             }
 
@@ -1356,11 +1437,33 @@ namespace mimic
                 slot.mockNext = 0;
                 slot.mockGain = 1.0f;
                 slot.mockDecay = 0.86f;
-                slot.mockOctaves = m >= 0.35f && m < 0.7f;
-                slot.mockPitchStep = m >= 0.7f ? (rng.chance (0.6f) ? 1.0f : -1.0f) : 0.0f;
-                slot.mockRoll = ! tonal && m > 0.5f;
+                slot.mockSlice = slice;
+                // No pitch games. Bent further, a lowpass closes over the
+                // repeats; furthest, they speed up on the grid: two
+                // eighths, four sixteenths, eight thirty-seconds.
+                slot.mockRatchet = m >= 0.7f && ! triplets;
                 slot.mockPan = rng.chance (0.5f) ? 0.6f : -0.6f;
-                length = slot.mockRepeats * slot.mockStep + slice;
+
+                if (slot.mockRatchet)
+                {
+                    slot.mockStep = beat * 0.25;
+                    slot.mockSwing = 0.5f;
+                    slot.mockRepeats = 14;
+                    slot.mockDecay = 0.92f;
+                    length = 12.0 * slot.mockStep + slice;
+                }
+                else
+                {
+                    length = slot.mockRepeats * slot.mockStep + slice;
+                }
+
+                if (m >= 0.35f)
+                {
+                    slot.useLp = true;
+                    slot.lpFrom = 12000.0f;
+                    slot.lpTo = 1400.0f + 1200.0f * (1.0f - m);
+                }
+
                 slot.toDelay = 0.2f + 0.3f * sp;
                 slot.toCave = 0.2f + 0.3f * sp;
                 panSpread = 0.0f;
@@ -1369,37 +1472,45 @@ namespace mimic
 
             case Trick::hum:
             {
+                // A drone: the steadiest part of the last note, held by long,
+                // dense, smooth grains (no backwards ones, hardly any
+                // scatter), so it sustains instead of swarming. Bent
+                // further, an octave below joins in. The lowpass slowly
+                // opens as it wakes.
+                const double room = juce::jlimit (0.03 * sr, 0.12 * sr, 0.4 * (double) (end - c.sustainAt));
                 Cloud::Settings cs;
-                cs.from = c.sustainAt - 0.04 * sr;
-                cs.to = c.sustainAt + 0.04 * sr;
+                cs.from = c.sustainAt - 0.5 * room;
+                cs.to = c.sustainAt + 0.5 * room;
                 cs.scan = 0.0;
-                cs.grainMs = 90.0f + 90.0f * rng.uni();
-                cs.density = 45.0f;
-                cs.jitterMs = 25.0f;
-                cs.reverse = 0.15f;
-                cs.spread = 0.8f;
-                cs.detuneCents = 8.0f;
+                cs.grainMs = 150.0f + 60.0f * rng.uni();
+                cs.density = 55.0f;
+                cs.jitterMs = 6.0f;
+                cs.reverse = 0.0f;
+                cs.spread = 0.45f;
+                cs.detuneCents = 3.0f;
 
                 if (m < 0.3f)
                     cs.pitches = { 1.0f, 1.0f, 1.0f, 1.0f };
                 else if (m < 0.6f)
-                    cs.pitches = { 1.0f, 1.0f, 2.0f, 0.5f };
+                    cs.pitches = { 1.0f, 1.0f, 0.5f, 1.0f };
                 else
-                    cs.pitches = { 1.0f, 0.5f, 2.0f, fifthUp };
+                    cs.pitches = { 1.0f, 0.5f, 0.5f, 2.0f };
 
                 slot.cloud.start (&c, cs, rng.next());
-                slot.cloudGain = 0.8f;
-                length = (2.5 + 5.0 * sp) * sr;
-                slot.attack = (float) (0.25 * sr);
-                slot.releaseSamples = (float) (0.45 * length);
+                slot.cloud.setScanPosition (c.sustainAt);
+                slot.cloudGain = 0.9f;
+                length = (4.0 + 7.0 * sp) * echoScale * sr;
+                slot.attack = (float) (0.6 * sr);
+                slot.releaseSamples = (float) (0.4 * length);
                 slot.useLp = true;
-                slot.lpFrom = 9000.0f;
-                slot.lpTo = 1800.0f;
-                slot.dry = 0.9f;
-                slot.toCave = 0.5f + 0.4f * sp;
-                slot.toDelay = 0.05f;
-                shimmer = 0.05f + 0.2f * m;
-                decayScale = 1.4f;
+                slot.lpFrom = 1100.0f;
+                slot.lpTo = 4200.0f;
+                slot.dry = 1.0f;
+                slot.toCave = 0.3f + 0.35f * sp;
+                slot.toDelay = 0.0f;
+                shimmer = 0.0f;
+                decayScale = 1.6f;
+                heatScale = 1.3f;
                 break;
             }
 
@@ -1429,7 +1540,9 @@ namespace mimic
         else if (dub)
             delay.set (echo);
 
-        cave.set (sp, decayScale, shimmer);
+        caveDecay = decayScale;
+        caveShimmer = shimmer;
+        cave.set (sp, decayScale * caveLengths[lengthIndex], shimmer);
 
         // Saturation: Heat for all of them; the radio and the dub always cook.
         float heatNow = s.heat * heatScale;
@@ -1479,17 +1592,22 @@ namespace mimic
     void Answerer::startMockRepeat (Slot& slot)
     {
         const int k = slot.mockIndex;
-        double rate = 1.0;
 
-        if (slot.mockOctaves)
-            rate = (k & 1) ? 2.0 : 1.0;
+        // The step to the next repeat: on the grid, swung with the track;
+        // a ratchet goes eighths, sixteenths, thirty-seconds.
+        double step = slot.mockStep;
 
-        if (slot.mockPitchStep != 0.0f)
-            rate = std::exp2 (slot.mockPitchStep * (float) k / 12.0f);
+        if (slot.mockRatchet)
+            step = slot.mockStep * (k < 2 ? 2.0 : (k < 6 ? 1.0 : 0.5));
+        else if (slot.mockSwing > 0.5f)
+            step = 2.0 * slot.mockStep * ((k & 1) ? 1.0 - slot.mockSwing : slot.mockSwing);
 
-        // Each repeat on its own reader, so the last one rings out under it.
+        // Each repeat on its own reader, so the last one rings out under it;
+        // a repeat never runs past the next-but-one, where its reader is
+        // needed again (no clicks from a reader cut mid-sound).
         auto& reader = (k & 1) ? slot.tape2 : slot.tape;
-        reader.start (&slot.capture, slot.mockFrom, slot.mockTo, rate, false);
+        const double slice = juce::jmin (slot.mockSlice, 1.8 * step);
+        reader.start (&slot.capture, slot.mockFrom, slot.mockFrom + slice, 1.0, false);
         const float gain = slot.mockGain * std::pow (slot.mockDecay, (float) k);
         float pl = 1.0f, pr = 1.0f;
         equalPower ((k & 1) ? -slot.mockPan : slot.mockPan, pl, pr);
@@ -1507,15 +1625,6 @@ namespace mimic
             slot.tapePanR = pr;
         }
 
-        // Rolls on drums: the second half comes twice as fast.
-        double step = slot.mockStep;
-
-        if (slot.mockSwing > 0.5f)
-            step = 2.0 * slot.mockStep * ((k & 1) ? 1.0 - slot.mockSwing : slot.mockSwing);
-
-        if (slot.mockRoll && k >= slot.mockRepeats / 2)
-            step *= 0.5;
-
         slot.mockNext = slot.age + (int64_t) step;
         ++slot.mockIndex;
     }
@@ -1532,10 +1641,50 @@ namespace mimic
 
         float l = 0.0f, r = 0.0f, a, b;
 
-        if (slot.tape.render (a, b))
+        // Dub: the note lands when the swell ends; the swell stops dead.
+        if (slot.hitAt > 0 && slot.age == slot.hitAt)
         {
-            l += a * slot.tapeGain * slot.tapePanL;
-            r += b * slot.tapeGain * slot.tapePanR;
+            slot.tapeGain = 1.0f;
+            slot.toDelay = slot.toDelayAfterHit;
+            slot.cloud.stop();
+            slot.cloudGain = 0.0f;
+        }
+
+        const bool tapeWaits = slot.hitAt > 0 && slot.age < slot.hitAt;
+
+        if (! tapeWaits && slot.tape.render (a, b))
+        {
+            float g = slot.tapeGain;
+
+            if (slot.ghost)
+            {
+                // Where in its note the tape is: the swell restarts at
+                // every onset (dropping in 4 ms, rising over ghostAttack,
+                // never longer than most of the note).
+                const double p = slot.tape.position();
+                const auto& c = slot.capture;
+                double start = 0.0, next = (double) c.length;
+
+                for (int k = 0; k < c.numOnsets; ++k)
+                {
+                    if ((double) c.onsets[(size_t) k] <= p)
+                        start = (double) c.onsets[(size_t) k];
+                    else
+                    {
+                        next = (double) c.onsets[(size_t) k];
+                        break;
+                    }
+                }
+
+                const float rise = juce::jmax (1.0f, juce::jmin (slot.ghostAttack, 0.8f * (float) (next - start)));
+                const float x = juce::jmin (1.0f, (float) (p - start) / rise);
+                const float target = x * x * (3.0f - 2.0f * x);
+                slot.ghostEnv += target < slot.ghostEnv ? slot.ghostFall * (target - slot.ghostEnv) : target - slot.ghostEnv;
+                g *= slot.ghostEnv;
+            }
+
+            l += a * g * slot.tapePanL;
+            r += b * g * slot.tapePanR;
         }
 
         if (slot.tape2.render (a, b))
@@ -1559,8 +1708,19 @@ namespace mimic
         if (slot.cloudGain > 0.0f)
         {
             slot.cloud.render (a, b);
-            l += a * slot.cloudGain;
-            r += b * slot.cloudGain;
+            float g = slot.cloudGain;
+
+            if (slot.hitAt > 0)
+            {
+                // The reverse-reverb swell: rises steeply into the hit, and
+                // is gone (in its last 6 ms, no click) as the note lands.
+                const float x = (float) slot.age / (float) slot.hitAt;
+                const float cut = juce::jlimit (0.0f, 1.0f, (float) (slot.hitAt - slot.age) / (float) (0.006 * sr));
+                g *= x * x * x * cut;
+            }
+
+            l += a * g;
+            r += b * g;
         }
 
         // The broken radio: fewer bits and a held sample rate, before its
@@ -1670,8 +1830,15 @@ namespace mimic
         return slots[(size_t) active];
     }
 
-    bool Answerer::captureOlder (Capture& c, Rng& rng, int64_t length)
+    bool Answerer::captureOlder (Capture& c, Rng& rng, double ppqNow, const AnswerSettings& s)
     {
+        // Whole beats of it (about three seconds), starting on a beat of the
+        // song, or on a note when there is no song: what comes back from
+        // far away still keeps time.
+        const bool grid = s.playing && s.ppqPerSample > 0.0;
+        const double beats = juce::jmax (2.0, std::round (3.0 * sr / s.samplesPerBeat));
+        const auto length = grid ? (int64_t) (beats * s.samplesPerBeat) : (int64_t) (3.0 * sr);
+
         // Somewhere in the last twenty seconds (not the phrase just played)
         // where the track was really playing.
         const auto blocks = (int64_t) blockLevel.size();
@@ -1695,7 +1862,26 @@ namespace mimic
 
             if (blockLevel[(size_t) (b % blocks)] > 0.4f * loudest)
             {
-                const int64_t from = b * levelBlock - (int64_t) (0.1 * sr);
+                int64_t from = b * levelBlock - (int64_t) (0.1 * sr);
+
+                if (grid)
+                {
+                    const double ppqFrom = ppqNow - (double) (now - from) * s.ppqPerSample;
+                    from += (int64_t) std::llround ((std::floor (ppqFrom + 0.5) - ppqFrom) / s.ppqPerSample);
+                }
+                else
+                {
+                    // The nearest onset heard within a quarter second.
+                    int64_t best = -1;
+
+                    for (const auto t : onsetTimes)
+                        if (t > 0 && std::abs (t - from) < (int64_t) (0.25 * sr) && (best < 0 || std::abs (t - from) < std::abs (best - from)))
+                            best = t;
+
+                    if (best >= 0)
+                        from = best - (int64_t) (0.003 * sr);
+                }
+
                 const int64_t to = juce::jmin (from + length, pendingFrom);
 
                 if (to - from < (int64_t) (0.5 * sr) || from < now - (int64_t) ring[0].size() + levelBlock)
@@ -1772,7 +1958,7 @@ namespace mimic
                     const bool older = (pendingTrick == Trick::cloud || pendingTrick == Trick::hum)
                                     && memoryRng.chance (s.memory * 0.8f);
 
-                    if (! older || ! captureOlder (slot.capture, memoryRng, (int64_t) (3.0 * sr)))
+                    if (! older || ! captureOlder (slot.capture, memoryRng, ppqNow, s))
                         capture (slot.capture, pendingFrom, pendingTo);
 
                     begin (slot, pendingTrick, s, pendingSeed);

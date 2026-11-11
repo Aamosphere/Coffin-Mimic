@@ -3,6 +3,7 @@
 // deterministic bounces) and writes WAV files to listen to.
 //
 // usage: MimicTest <output folder>
+#include "MonoToStereo.h"
 #include <JuceHeader.h>
 #include "../Source/PluginProcessor.h"
 
@@ -910,6 +911,8 @@ int main (int argc, char** argv)
         std::printf ("%-28s %s max difference %g\n", "deterministic bounce", diff == 0.0f ? "ok  " : "FAIL", diff);
         ok = ok && diff == 0.0f;
     }
+
+    ok = checkMonoToStereo<MimicProcessor> ("mono -> stereo") && ok;
 
     writeWav (folder.getChildFile ("dry - drums.wav"), drumLoop);
     writeWav (folder.getChildFile ("dry - melody.wav"), lead);

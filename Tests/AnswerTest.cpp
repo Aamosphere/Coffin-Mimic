@@ -468,6 +468,55 @@ int main (int argc, char** argv)
         }
     }
 
+    // Answer as a mix: at 100 % the track is gone, only the answers are left.
+    {
+        const double sr = 48000.0;
+        juce::AudioBuffer<float> phrase (2, (int) (12.0 * sr));
+        phrase.clear();
+
+        // Two bars of notes, two bars of silence, and again.
+        for (int note = 0; note < 32; ++note)
+        {
+            if ((note / 8) % 2 == 1)
+                continue;
+
+            const int start = (int) (note * 0.25 * sr);
+            const float hz = 220.0f * std::exp2 ((float) (note % 5) / 12.0f);
+
+            for (int n = 0; n < (int) (0.22 * sr) && start + n < phrase.getNumSamples(); ++n)
+            {
+                const float t = (float) n / (float) sr;
+                const float x = 0.4f * std::sin (6.2831853f * hz * t) * std::exp (-t * 6.0f);
+                phrase.setSample (0, start + n, x);
+                phrase.setSample (1, start + n, x);
+            }
+        }
+
+        float energy[2] {};
+
+        for (int k = 0; k < 2; ++k)
+        {
+            const float mix = k == 0 ? 0.5f : 1.0f;
+            auto r = render (phrase, sr, [mix] (MimicProcessor& p)
+            {
+                setParam (p, mimic::ids::material, (float) mimic::ids::materialMelodic);
+                setParam (p, mimic::ids::answer, mix);
+            }, {});
+
+            // While the notes play (bar one, after the first second of fade-in).
+            for (int i = (int) (0.5 * sr); i < (int) (1.9 * sr); ++i)
+                energy[k] += r.out.getSample (0, i) * r.out.getSample (0, i);
+
+            if (k == 1)
+                writeWav (out.getChildFile ("synthetic line - answer 100 % (fully wet).wav"), r.out, sr);
+        }
+
+        const bool good = energy[1] < 0.02f * energy[0];
+        ok = ok && good;
+        std::printf ("answer 100 %%: the track while it plays %.1f dB against 50 %%    %s\n",
+                     10.0f * std::log10 (juce::jmax (1.0e-12f, energy[1] / juce::jmax (1.0e-12f, energy[0]))), good ? "ok" : "FAIL");
+    }
+
     std::printf (ok ? "\nALL OK\n" : "\nSOME FAILED\n");
     return ok ? 0 : 1;
 }

@@ -200,7 +200,7 @@ namespace mimic
                     b.set (hunger, 0.8f);
                     b.set (patience, 0.19f);
                     b.set (mockery, 0.7f);
-                    b.set (answer, 0.55f);
+                    b.set (answer, 0.4f);   // the answers a little under the track
                 }, false },
 
                 { "Mild Gnash, Kind Ghost", "answers, gnash, subtle", false, [] (Builder& b)

@@ -212,10 +212,14 @@ void MimicEditor::Look::drawToggleButton (juce::Graphics& g, juce::ToggleButton&
 
     if (sub.isNotEmpty())
     {
-        g.setFont (font (bangers, juce::jmin (16.0f, r.getHeight() * 0.5f)));
-        g.drawText (b.getButtonText().toUpperCase(), r.withTrimmedBottom (r.getHeight() * 0.36f).translated (0.0f, 2.0f), juce::Justification::centred);
-        g.setFont (font (typewriter, 9.5f));
-        g.drawText (sub, r.withTrimmedTop (r.getHeight() * 0.6f).translated (0.0f, -2.0f), juce::Justification::centred);
+        // Two lines that never touch: the name in the top part, what it
+        // was (in small type) in the bottom part.
+        auto text = r.reduced (2.0f, 1.5f);
+        const auto top = text.removeFromTop (text.getHeight() * 0.6f);
+        g.setFont (font (bangers, juce::jmin (14.0f, top.getHeight())));
+        g.drawText (b.getButtonText().toUpperCase(), top, juce::Justification::centredBottom);
+        g.setFont (font (typewriter, juce::jmin (9.0f, text.getHeight())));
+        g.drawText (sub, text, juce::Justification::centredTop);
     }
     else
     {
@@ -315,6 +319,9 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     setUpKnob (stage, filterKnob, ids::answerFilter, {}, false);
     setUpKnob (stage, memory, ids::memory, {}, false);
     setUpKnob (stage, answerLevel, ids::answer, {}, false);
+    setUpPick (stage, spaceLength, ids::spaceLength, {});
+    spaceLength.label.setVisible (false);
+    spaceLength.box.setTooltip ("How long the cave and the echoes ring: Short, Medium, Long or Endless. SPACE sets how much of them you hear.");
     filterKnob.slider.setDoubleClickReturnValue (true, 0.0);
     hunger.slider.setTooltip ("How often it answers: low, now and then; full, every gap you leave.");
     patience.slider.setTooltip ("How long it waits: low, it jumps into the smallest gap; high, it waits until you have really stopped.");
@@ -323,7 +330,7 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     mockery.slider.setTooltip ("How far it bends your phrase: low, a faithful echo; high, octaves down, laughing stutters and broken radios.");
     space.slider.setTooltip ("The cave the answers live in: its reverb and the tape echoes. Up: bigger, longer, wetter.");
     heat.slider.setTooltip ("Saturation on the answers: warm tape at first, burning at the top.");
-    answerLevel.slider.setTooltip ("How loud the answers are. At 0 the Mimic keeps quiet.");
+    answerLevel.slider.setTooltip ("A mix. 0 %: only your track, the Mimic keeps quiet. 50 %: your track and the answers, both at full. 100 %: only the answers (fully wet, for an aux or a bounce).");
 
     for (int t = 0; t < numTricks; ++t)
     {
@@ -753,7 +760,7 @@ void MimicEditor::paintListens (juce::Graphics& g)
 
 void MimicEditor::paintAnswers (juce::Graphics& g)
 {
-    const bool quiet = value (ids::answer) <= 0.0f;
+    const bool quiet = value (ids::answer) <= 0.0f;   // a mix: 0 = the track alone
     paintSection (g, answersArea, quiet ? "...it keeps quiet (Answer is at 0)." : "...then it answers back!", {}, ! quiet);
 
     knobCaption (g, hunger, "HUNGER", ids::hunger, 22.0f, "how often");
@@ -991,10 +998,12 @@ void MimicEditor::resized()
             small[k]->slider.setBounds (350 + k * 69, 290, 48, 48);
     }
 
-    tricksArea = { 340, 410, 344, 78 };
+    spaceLength.box.setBounds (338, 373, 74, 19);
+
+    tricksArea = { 340, 416, 344, 74 };
 
     for (int t = 0; t < numTricks; ++t)
-        tricks[t].button.setBounds (tricksArea.getX() + (t % 4) * 87, tricksArea.getY() + (t / 4) * 40, 83, 36);
+        tricks[t].button.setBounds (tricksArea.getX() + (t % 4) * 87, tricksArea.getY() + (t / 4) * 38, 83, 34);
 
     // GNASH: the switch, mild to wild and the mode, the small knobs, the
     // chips, the pattern.

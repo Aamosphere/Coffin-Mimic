@@ -139,7 +139,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
     toggle (ids::useEcho, "Echo", false);
     add (ids::dynamics, "Dynamics", { 0.0f, 1.0f }, 0.0f, percent);
 
-    add (ids::answer, "Answer", { 0.0f, 1.0f }, 0.7f, percent);
+    // A mix: 0 % the track alone, 50 % the track and the answers both at
+    // full, 100 % only the answers.
+    add (ids::answer, "Answer", { 0.0f, 1.0f }, 0.5f, percent);
     add (ids::hunger, "Hunger", { 0.0f, 1.0f }, 0.5f, percent);
     add (ids::mockery, "Mockery", { 0.0f, 1.0f }, 0.35f, percent);
     add (ids::space, "Space", { 0.0f, 1.0f }, 0.45f, percent);
@@ -166,6 +168,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout MimicProcessor::createLayout
     add (ids::freeBeat, "Free Beat", beatRange, 500.0f,
          AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " ms"; }));
     toggle (ids::answerBreaks, "Answer Breaks", true);
+    pick (ids::spaceLength, "Space Length", ids::spaceLengthNames, 1);
 
     return layout;
 }
@@ -177,7 +180,10 @@ bool MimicProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
     if (out != juce::AudioChannelSet::stereo() && out != juce::AudioChannelSet::mono())
         return false;
 
-    if (layouts.getMainInputChannelSet() != out)
+    // Same in and out, or a mono track opened as Mono -> Stereo.
+    const auto in = layouts.getMainInputChannelSet();
+
+    if (in != out && ! (in == juce::AudioChannelSet::mono() && out == juce::AudioChannelSet::stereo()))
         return false;
 
     if (layouts.inputBuses.size() > 1)
@@ -194,6 +200,7 @@ bool MimicProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 void MimicProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     sr = sampleRate;
+    sideCopy.setSize (2, juce::jmax (samplesPerBlock, 8192));
     now = 0;
 
     history.prepare (sr, 24.0);
@@ -362,11 +369,11 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 {
     juce::ScopedNoDenormals noDenormals;
 
-    auto main = getBusBuffer (buffer, true, 0);
     const int numSamples = buffer.getNumSamples();
-    const int numCh = main.getNumChannels();
+    const int numIn = getMainBusNumInputChannels();
+    const int numCh = getMainBusNumOutputChannels();
 
-    if (numCh == 0 || numSamples == 0)
+    if (numIn == 0 || numCh == 0 || numSamples == 0)
         return;
 
     // The prey's own input, when the host gives one.
@@ -386,6 +393,32 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             }
         }
     }
+
+    // Mono -> Stereo: on a mono track the host's buffer holds the output's
+    // right channel in the same memory as the sidechain's left, so the
+    // sidechain is saved first, then the track is copied to the right.
+    if (numIn < numCh)
+    {
+        if (scL != nullptr)
+        {
+            if (numSamples <= sideCopy.getNumSamples())
+            {
+                sideCopy.copyFrom (0, 0, scL, numSamples);
+                sideCopy.copyFrom (1, 0, scR, numSamples);
+                scL = sideCopy.getReadPointer (0);
+                scR = sideCopy.getReadPointer (1);
+            }
+            else
+            {
+                scL = scR = nullptr;   // a block bigger than promised: no sidechain this once
+            }
+        }
+
+        for (int ch = numIn; ch < numCh; ++ch)
+            buffer.copyFrom (ch, 0, buffer, 0, 0, numSamples);
+    }
+
+    auto main = getBusBuffer (buffer, false, 0);
 
     // The dry track, for the answers to listen to.
     {
@@ -1259,7 +1292,11 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     // The answers: they listen to the dry track and are laid over the top.
     {
         AnswerSettings as;
-        as.level = value (ids::answer);
+        // Answer is a mix: up to 50 % the answers come up under the full
+        // track, past it the track goes down under full answers.
+        const float answerMix = value (ids::answer);
+        as.level = 0.7f * juce::jmin (1.0f, 2.0f * answerMix);
+        const float trackTarget = juce::jmin (1.0f, 2.0f * (1.0f - answerMix));
         as.hunger = value (ids::hunger);
         as.patience = value (ids::patience);
         as.filter = value (ids::answerFilter);
@@ -1271,6 +1308,7 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
             as.breaks[(size_t) k] = { breakEvents[(size_t) k].first, breakEvents[(size_t) k].second };
         as.mockery = value (ids::mockery);
         as.space = value (ids::space);
+        as.spaceLength = choice (ids::spaceLength);
         as.heat = value (ids::heat);
         as.enabled = 0;
 
@@ -1292,6 +1330,22 @@ void MimicProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
         std::fill (answerL.begin(), answerL.begin() + numSamples, 0.0f);
         std::fill (answerR.begin(), answerR.begin() + numSamples, 0.0f);
         answerer.process (dryCopyL.data(), dryCopyR.data(), answerL.data(), answerR.data(), numSamples, as);
+
+        // The track under the answers (smoothed: no zipper when the knob moves).
+        if (trackTarget < 1.0f || trackGain < 1.0f)
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                trackGain += 0.002f * (trackTarget - trackGain);
+                left[i] *= trackGain;
+
+                if (right != nullptr)
+                    right[i] *= trackGain;
+            }
+
+            if (std::abs (trackGain - trackTarget) < 1.0e-4f)
+                trackGain = trackTarget;
+        }
 
         if (as.level > 0.0f || answerer.busy())
         {

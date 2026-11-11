@@ -13,13 +13,13 @@
 namespace mimic
 {
     // What an answer does with the phrase.
-    //   parrot     says it back, on tape
-    //   ghost      an octave away (or two), layered
-    //   cloud      dissolved into a drifting swarm of grains
+    //   parrot     says it back, on a slightly wobbly tape
+    //   ghost      every note swells in without its attack, into the cave
+    //   cloud      dissolved into a swarm of grains, on the song's grid
     //   backwards  reversed, swelling into the cave
-    //   dub        the last note thrown into a spiralling tape echo
-    //   mock       the last syllable stuttered back, laughing
-    //   hum        the last note frozen into a drone
+    //   dub        a reverse-reverb swell into the last note, then tape echoes
+    //   mock       the last syllable stuttered back on the grid, filtered
+    //   hum        the last note held as a drone
     //   radio      from a broken radio in the next room
     enum class Trick : uint8_t { parrot, ghost, cloud, backwards, dub, mock, hum, radio };
     inline constexpr int numTricks = 8;
@@ -120,13 +120,18 @@ namespace mimic
         bool render (float& l, float& r);   // false once past the end
         bool active() const { return capture != nullptr && on; }
         void setWow (float depth, float hz, double sampleRate);
+        // A slow, uneven drift of the speed on top of the wow: two slow
+        // waves that never line up, so the pitch wanders like old tape.
+        void setDrift (float depth, float hz, double sampleRate);
         double progress() const;
+        double position() const { return pos; }   // in the capture, played direction
 
     private:
         const Capture* capture = nullptr;
         bool on = false, reversed = false;
         double pos = 0.0, end = 0.0, begin = 0.0, rate = 1.0;
         float wowDepth = 0.0f, wowPhase = 0.0f, wowInc = 0.0f;
+        float driftDepth = 0.0f, driftPhase = 0.0f, driftInc = 0.0f;
         double fadeLength = 144.0;   // source samples
     };
 
@@ -178,11 +183,17 @@ namespace mimic
             float spread = 1.0f;          // stereo
             std::array<float, 4> pitches { 1.0f, 1.0f, 1.0f, 1.0f };
             float detuneCents = 6.0f;
+            // On the grid: grains start only on its lines (in samples), and
+            // read from the capture's own grid lines, so what they carry
+            // lands in time. 0 = free.
+            double grid = 0.0;
+            float gridChance = 1.0f;      // how many grid lines get a grain
         };
 
         void prepare (double sampleRate);
         void start (const Capture*, const Settings&, uint64_t seed);
         void stop() { spawning = false; }
+        void setScanPosition (double p) { scanPos = juce::jlimit (s.from, s.to, p); }
         void render (float& l, float& r);
         bool active() const;
 
@@ -193,6 +204,7 @@ namespace mimic
             double pos = 0.0, rate = 1.0;
             int age = 0, length = 1;
             float gainL = 0.7f, gainR = 0.7f;
+            bool sharp = false;           // a quick attack, so drum hits stay hits
         };
 
         void spawn();
@@ -202,6 +214,7 @@ namespace mimic
         double sr = 48000.0, scanPos = 0.0;
         bool spawning = false;
         float countdown = 0.0f, norm = 1.0f;
+        int64_t age = 0, gridTick = 0;
         std::array<Grain, 32> grains {};
         std::array<float, 1025> hann {};
         Rng rng { 1 };
@@ -239,6 +252,7 @@ namespace mimic
         float memory = 0.25f;    // 0..1, how often grains come from further back
         float mockery = 0.35f;   // 0..1, how far an answer is bent
         float space = 0.5f;      // 0..1, the cave and the echoes
+        int spaceLength = 1;     // 0 short, 1 medium, 2 long, 3 endless
         float heat = 0.25f;      // 0..1, saturation
         unsigned enabled = 0xff; // one bit per Trick
         int material = percussive;
@@ -306,8 +320,15 @@ namespace mimic
             int mockRepeats = 0, mockIndex = 0;
             double mockFrom = 0.0, mockTo = 0.0, mockStep = 1.0;
             int64_t mockNext = 0;
-            float mockPan = 0.0f, mockGain = 1.0f, mockPitchStep = 0.0f, mockDecay = 0.85f;
-            bool mockOctaves = false, mockRoll = false;
+            float mockPan = 0.0f, mockGain = 1.0f, mockDecay = 0.85f;
+            bool mockRatchet = false;    // repeats speed up: eighths, sixteenths, thirty-seconds
+            double mockSlice = 0.0;
+            // Ghost: each note swells in without its attack.
+            bool ghost = false;
+            float ghostAttack = 1.0f, ghostEnv = 0.0f, ghostFall = 0.0f;
+            // Dub: a reverse-reverb swell first, the note on the next beat.
+            int64_t hitAt = 0;
+            float toDelayAfterHit = 0.0f;
             float panL = 1.0f, panR = 1.0f;
             float tapePanL = 1.0f, tapePanR = 1.0f, tape2PanL = 1.0f, tape2PanR = 1.0f;
             Saturator sat;
@@ -324,7 +345,7 @@ namespace mimic
         void renderSlot (Slot&, float& l, float& r, const AnswerSettings&);
         void startMockRepeat (Slot&);
         void answerBreak (int lengthSamples, const AnswerSettings&);
-        bool captureOlder (Capture&, Rng&, int64_t length);
+        bool captureOlder (Capture&, Rng&, double ppqNow, const AnswerSettings&);
         Slot& takeSlot();
         float heardSwing (int grid) const;
         double nextGridLine (double ppqNow, double grid) const;
@@ -373,6 +394,7 @@ namespace mimic
 
         TapeDelay delay;
         Cave cave;
+        float caveDecay = 1.0f, caveShimmer = 0.0f;   // what the last answer asked of the cave
         float duck = 1.0f, tailDuck = 1.0f, duckAtt = 0.0f, duckRel = 0.0f;
         float levelSmooth = 0.0f;
         Svf masterLow, masterHigh;

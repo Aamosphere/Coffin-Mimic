@@ -143,6 +143,7 @@ private:
 
     // IT ANSWERS.
     Knob hunger, patience, mockery, space, heat, filterKnob, memory, answerLevel;
+    Pick spaceLength;   // how long the cave and echoes ring
     Switch tricks[mimic::numTricks];
 
     // SNARES.
