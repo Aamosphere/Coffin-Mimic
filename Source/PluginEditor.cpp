@@ -1,3 +1,4 @@
+#include "FitToScreen.h"
 #include "PluginEditor.h"
 #include "BinaryData.h"
 
@@ -454,7 +455,18 @@ MimicEditor::MimicEditor (MimicProcessor& p) : AudioProcessorEditor (p), mimicPr
     updateTimingControls();
     drawer.setVisible (mimicProcessor.advancedOpen);
     advancedButton.setButtonText (mimicProcessor.advancedOpen ? "HIDE" : "ADVANCED");
-    setSize (spineWidth + contentWidth, frontHeight + (mimicProcessor.advancedOpen ? drawerHeight : 0));
+    // Resizable at a fixed aspect ratio. The width you chose is kept with
+    // the project; the editor is only ever as big as fits on the screen.
+    preferredWidth = juce::jlimit (designWidth / 2, designWidth * 2,
+                                   (int) mimicProcessor.parameters.state.getProperty ("uiWidth", designWidth));
+    {
+        // Setting the limits already resizes the editor: not a size you chose.
+        const juce::ScopedValueSetter<bool> ours (sizingItself, true);
+        setResizable (true, true);
+        setResizeLimits (designWidth / 2, frontHeight / 2, designWidth * 2, (frontHeight + drawerHeight) * 2);
+    }
+
+    fitToScreen();
     startTimerHz (30);
 }
 
@@ -507,8 +519,22 @@ void MimicEditor::showAdvanced (bool show)
     mimicProcessor.advancedOpen = show;
     drawer.setVisible (show);
     advancedButton.setButtonText (show ? "HIDE" : "ADVANCED");
-    setSize (spineWidth + contentWidth, frontHeight + (show ? drawerHeight : 0));
+    fitToScreen();
     repaint();
+}
+
+int MimicEditor::designHeight() const
+{
+    return frontHeight + (mimicProcessor.advancedOpen ? drawerHeight : 0);
+}
+
+void MimicEditor::fitToScreen()
+{
+    // The drawer makes it taller: the same width might no longer fit.
+    const int width = aamo::widthThatFits (this, designWidth, designHeight(), preferredWidth);
+    const juce::ScopedValueSetter<bool> ours (sizingItself, true);
+    getConstrainer()->setFixedAspectRatio ((double) designWidth / (double) designHeight());
+    setSize (width, juce::roundToInt (width * (double) designHeight() / designWidth));
 }
 
 void MimicEditor::updateModeControls()
@@ -861,7 +887,9 @@ void MimicEditor::paint (juce::Graphics& g)
 {
     // The spine: the maker's name down the left edge, the same on every
     // Aamosphere plugin.
-    const auto spine = juce::Rectangle<float> (0.0f, 0.0f, (float) spineWidth, (float) getHeight());
+    // Drawn at the design size, scaled to the editor's.
+    g.addTransform (juce::AffineTransform::scale ((float) getWidth() / (float) designWidth));
+    const auto spine = juce::Rectangle<float> (0.0f, 0.0f, (float) spineWidth, (float) designHeight());
     g.setColour (spineGold);
     g.fillRect (spine);
     g.setColour (ink);
@@ -963,7 +991,19 @@ void MimicEditor::paintDrawer (juce::Graphics& g)
 
 void MimicEditor::resized()
 {
-    stage.setBounds (spineWidth, 0, contentWidth, getHeight());
+    // Everything is laid out at the design size, then the stage is scaled
+    // as a whole: the editor looks the same at any size.
+    const float scale = (float) getWidth() / (float) designWidth;
+    stage.setTransform ({});
+    stage.setBounds (spineWidth, 0, contentWidth, designHeight());
+    stage.setTransform (juce::AffineTransform::scale (scale));
+
+    // Only a size you picked by dragging becomes the one to come back to.
+    if (! sizingItself)
+    {
+        preferredWidth = getWidth();
+        mimicProcessor.parameters.state.setProperty ("uiWidth", getWidth(), nullptr);
+    }
 
     // Header.
     // The preset unit is laid out at full size and drawn at 75 %, tilted

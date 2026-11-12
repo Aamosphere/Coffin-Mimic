@@ -65,6 +65,16 @@ int main (int argc, char** argv)
     }
 
 
+    // SNAPSHOT_WIDTH: show it resized, as a user dragging its corner would.
+
+
+    if (auto* w = std::getenv ("SNAPSHOT_WIDTH"))
+
+
+        editor->setSize (std::atoi (w), juce::roundToInt (std::atoi (w) * (double) editor->getHeight() / editor->getWidth()));
+
+
+
     const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.0f);
     juce::File out (juce::String (argc > 1 ? argv[1] : "mimic.png"));
     out.deleteFile();

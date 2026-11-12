@@ -58,6 +58,7 @@ public:
     static constexpr int frontHeight = 620, drawerHeight = 236;
     // The Aamosphere spine on the left, then the plugin.
     static constexpr int spineWidth = 56, contentWidth = 1010;
+    static constexpr int designWidth = spineWidth + contentWidth;
 
 private:
     struct Look : juce::LookAndFeel_V4
@@ -129,6 +130,10 @@ private:
 
     // Everything but the spine sits on the stage.
     Drawer stage;
+    int preferredWidth = designWidth;   // the width you chose (shown smaller if it does not fit)
+    bool sizingItself = false;          // the editor is resizing itself, not you
+    int designHeight() const;           // taller with the drawer open
+    void fitToScreen();
 
     // Header.
     std::unique_ptr<MimicPresetBar> presetBar;
